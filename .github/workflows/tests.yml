@@ -1,0 +1,32 @@
+name: Tests
+
+on: [push, pull_request]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      DBREDUCE_TEST_ADMIN: postgresql://postgres@localhost:5432/postgres
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+      - run: uv python install 3.13
+      - run: sudo apt-get update && sudo apt-get install -y postgresql-client
+      - name: Verify privileged integration tests can run
+        run: test "$(psql "$DBREDUCE_TEST_ADMIN" -Atqc "SELECT rolsuper FROM pg_roles WHERE rolname = current_user")" = t
+      - run: uv run --locked pytest -q

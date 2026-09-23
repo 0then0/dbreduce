@@ -391,7 +391,7 @@ def test_disconnect_while_create_is_waiting_does_not_leave_database():
     real_connect = psycopg.connect
     creator = real_connect(admin, autocommit=True)
     blocker = real_connect(admin, autocommit=True)
-    creator.execute("SET lock_timeout = '30s'")
+    creator.execute("SET lock_timeout = '120s'")
     creator_pid = creator.info.backend_pid
     workspace = Workspace(admin)
     errors = []
@@ -443,7 +443,7 @@ def test_disconnect_while_create_is_waiting_does_not_leave_database():
         ):
             thread = threading.Thread(target=run_workspace, daemon=True)
             thread.start()
-            deadline = time.monotonic() + 5
+            deadline = time.monotonic() + 30
             blocked = False
             while time.monotonic() < deadline:
                 blocked = blocker.execute(
@@ -457,9 +457,9 @@ def test_disconnect_while_create_is_waiting_does_not_leave_database():
 
             with socket.socket(fileno=os.dup(creator.pgconn.socket)) as connection_socket:
                 connection_socket.shutdown(socket.SHUT_RDWR)
-            assert cleanup_connecting.wait(timeout=5)
+            assert cleanup_connecting.wait(timeout=30)
             blocker.execute("ROLLBACK")
-            thread.join(timeout=20)
+            thread.join(timeout=30)
         assert not thread.is_alive()
         assert errors and isinstance(errors[0], psycopg.OperationalError)
         assert not workspace.created
@@ -475,7 +475,7 @@ def test_disconnect_while_create_is_waiting_does_not_leave_database():
             pass
         blocker.close()
         if thread is not None:
-            thread.join(timeout=20)
+            thread.join(timeout=30)
         if name_was_absent:
             try:
                 with real_connect(admin, autocommit=True, connect_timeout=10) as cleanup:
@@ -490,7 +490,7 @@ def test_disconnect_while_create_is_waiting_does_not_leave_database():
                         "WHERE pid = %s AND state = 'active' AND query LIKE %s",
                         (creator_pid, create_query),
                     )
-                    deadline = time.monotonic() + 5
+                    deadline = time.monotonic() + 30
                     while cleanup.execute(active_create, (creator_pid, create_query)).fetchone()[0]:
                         assert time.monotonic() < deadline, "CREATE backend did not terminate"
                         time.sleep(0.05)
@@ -504,7 +504,7 @@ def test_disconnect_while_create_is_waiting_does_not_leave_database():
         else:
             creator.close()
         if thread is not None:
-            thread.join(timeout=5)
+            thread.join(timeout=30)
         if thread is not None and thread.is_alive():
             pytest.fail("CREATE worker did not finish after releasing the catalog lock")
 
