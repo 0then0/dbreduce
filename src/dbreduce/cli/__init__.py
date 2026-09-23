@@ -184,10 +184,10 @@ def reduce_command(
                     "oracle": "FAIL",
                     "restore_database": workspace.name,
                 }
-                publish_result(exported, output, report, result)
-                typer.echo(
-                    f"Final: {final_rows} rows, oracle: FAIL, "
-                    f"executions: {runner.executions}, cache hits: {cache.hits}"
-                )
+            publish_result(exported, output, report, result)
+            typer.echo(
+                f"Final: {final_rows} rows, oracle: FAIL, "
+                f"executions: {runner.executions}, cache hits: {cache.hits}"
+            )
     except (OSError, ValueError, RuntimeError, psycopg.Error) as error:
         fail(error)

@@ -349,6 +349,7 @@ def test_lost_create_reply_cleans_real_database():
             result = self.connection.execute(query)
             if isinstance(query, sql.Composed) and query.as_string().startswith("CREATE DATABASE"):
                 created_on_server = True
+                self.connection.close()
                 raise psycopg.OperationalError("server reply lost")
             return result
 
@@ -373,6 +374,45 @@ def test_lost_create_reply_cleans_real_database():
     finally:
         if created_on_server:
             with real_connect(admin, autocommit=True) as conn:
+                conn.execute(
+                    sql.SQL("DROP DATABASE IF EXISTS {} WITH (FORCE)").format(
+                        sql.Identifier(workspace.name)
+                    )
+                )
+
+
+def test_workspace_cleanup_can_retry_after_connection_failure():
+    admin = os.environ.get("DBREDUCE_TEST_ADMIN")
+    if not admin:
+        pytest.skip("Set DBREDUCE_TEST_ADMIN")
+    workspace = Workspace(admin)
+    created_on_server = False
+    try:
+        workspace.create()
+        created_on_server = True
+        with patch(
+            "dbreduce.postgres.database.psycopg.connect",
+            side_effect=psycopg.OperationalError("server unavailable"),
+        ):
+            with pytest.raises(RuntimeError, match=workspace.name) as error:
+                workspace.close()
+        assert isinstance(error.value.__cause__, psycopg.OperationalError)
+        assert workspace.created
+        with psycopg.connect(admin) as conn:
+            assert conn.execute(
+                "SELECT EXISTS (SELECT 1 FROM pg_database WHERE datname = %s)",
+                (workspace.name,),
+            ).fetchone()[0]
+        workspace.close()
+        assert not workspace.created
+        with psycopg.connect(admin) as conn:
+            assert not conn.execute(
+                "SELECT EXISTS (SELECT 1 FROM pg_database WHERE datname = %s)",
+                (workspace.name,),
+            ).fetchone()[0]
+    finally:
+        if created_on_server:
+            with psycopg.connect(admin, autocommit=True) as conn:
                 conn.execute(
                     sql.SQL("DROP DATABASE IF EXISTS {} WITH (FORCE)").format(
                         sql.Identifier(workspace.name)
@@ -498,6 +538,53 @@ def test_cli_preserves_source_and_exports(workspace, tmp_path):
     assert report_data["raise_exception_rejections"] == 0
     dump(workspace.dsn, after, archive=False, restrict_key="TestSourceUnchanged")
     assert before.read_bytes() == after.read_bytes()
+
+
+def test_cli_does_not_publish_when_workspace_cleanup_fails(workspace, tmp_path):
+    from typer.testing import CliRunner
+
+    from dbreduce.cli import app
+
+    with psycopg.connect(workspace.dsn) as conn:
+        conn.execute("DELETE FROM child WHERE id > 2")
+        conn.execute("DELETE FROM parent WHERE id > 2")
+    code = (
+        "import os,sys,psycopg; "
+        "c=psycopg.connect(os.environ['DATABASE_URL']); "
+        "sys.exit(int(c.execute('SELECT EXISTS(SELECT 1 FROM child WHERE id=1)').fetchone()[0]))"
+    )
+    output = tmp_path / "min.sql"
+    report = tmp_path / "report.json"
+    copies = []
+
+    def fail_cleanup(copy, *_args):
+        copies.append(copy)
+        raise RuntimeError(f"Could not confirm cleanup of workspace database {copy.name}")
+
+    try:
+        with patch.object(Workspace, "__exit__", fail_cleanup):
+            with patch("dbreduce.cli.dump", wraps=dump) as dump_call:
+                result = CliRunner().invoke(
+                    app,
+                    [
+                        "reduce",
+                        "--database",
+                        workspace.dsn,
+                        "--oracle",
+                        f"{shlex.quote(sys.executable)} -c {shlex.quote(code)}",
+                        "--output",
+                        str(output),
+                        "--report",
+                        str(report),
+                    ],
+                )
+        assert any(call.kwargs.get("create_database") for call in dump_call.call_args_list)
+        assert result.exit_code == 1
+        assert copies and copies[0].name in result.output
+        assert not output.exists() and not report.exists()
+    finally:
+        for copy in copies:
+            copy.close()
 
 
 def test_cli_inspect_reports_fk_graph_without_writes(workspace):

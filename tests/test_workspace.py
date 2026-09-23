@@ -107,6 +107,32 @@ def test_existing_database_is_never_dropped_after_name_collision():
     )
 
 
+@pytest.mark.parametrize(
+    ("operation_error", "expected"),
+    [
+        (ValueError("invalid source"), "invalid source"),
+        (psycopg.OperationalError("password=syntheticsecret"), "PostgreSQL operation failed"),
+    ],
+)
+def test_cleanup_failure_keeps_original_reason_without_leaking_database_error(
+    operation_error, expected
+):
+    connection = MagicMock()
+    connection.__enter__.return_value = connection
+    with patch(
+        "dbreduce.postgres.database.psycopg.connect",
+        side_effect=[connection, psycopg.OperationalError("server unavailable")],
+    ):
+        with pytest.raises(RuntimeError) as error:
+            with Workspace("postgresql:///original") as workspace:
+                workspace.create()
+                raise operation_error
+    assert expected in str(error.value)
+    assert workspace.name in str(error.value)
+    assert "syntheticsecret" not in str(error.value)
+    assert isinstance(error.value.__cause__, RuntimeError)
+
+
 def test_inline_sslpassword_is_rejected_before_spawning():
     with patch("dbreduce.postgres.dump.subprocess.run") as run:
         with pytest.raises(ValueError, match="sslpassword"):

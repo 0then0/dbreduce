@@ -160,7 +160,8 @@ FK closure and candidate dumps require memory/disk proportional to the dataset.
   a workspace. Only generated database names are ever passed to DROP DATABASE.
 - Ordinary failures and Ctrl-C attempt to clean up the workspace, including an
   uncertain CREATE DATABASE result. A killed process or server outage can still
-  leave a `dbreduce_<uuid>` database for manual cleanup.
+  leave a `dbreduce_<uuid>` database for manual cleanup. If cleanup cannot be
+  confirmed, the error reports the exact database name to inspect after recovery.
 - Dumps/reports contain application data. Store them appropriately; no DSN is saved
   in the report. PostgreSQL errors are intentionally summarized without credentials.
 

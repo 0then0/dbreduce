@@ -195,13 +195,19 @@ class Workspace:
 
     def close(self) -> None:
         if self.created:
-            with psycopg.connect(self.admin_dsn, autocommit=True, connect_timeout=10) as conn:
-                conn.execute("SET statement_timeout = '600s'")
-                conn.execute(
-                    sql.SQL("DROP DATABASE IF EXISTS {} WITH (FORCE)").format(
-                        sql.Identifier(self.name)
+            try:
+                with psycopg.connect(self.admin_dsn, autocommit=True, connect_timeout=10) as conn:
+                    conn.execute("SET statement_timeout = '600s'")
+                    conn.execute(
+                        sql.SQL("DROP DATABASE IF EXISTS {} WITH (FORCE)").format(
+                            sql.Identifier(self.name)
+                        )
                     )
-                )
+            except psycopg.Error as error:
+                raise RuntimeError(
+                    f"Could not confirm cleanup of workspace database {self.name}; "
+                    "inspect and remove it if present"
+                ) from error
             self.created = False
 
     def __exit__(
@@ -210,4 +216,16 @@ class Workspace:
         exc: BaseException | None,
         tb: TracebackType | None,
     ) -> None:
-        self.close()
+        try:
+            self.close()
+        except RuntimeError as cleanup_error:
+            if isinstance(exc, Exception):
+                original = (
+                    "PostgreSQL operation failed; check connection and permissions"
+                    if isinstance(exc, psycopg.Error)
+                    else str(exc) or type(exc).__name__
+                )
+                raise RuntimeError(
+                    f"Original failure: {original}; {cleanup_error}"
+                ) from cleanup_error
+            raise
