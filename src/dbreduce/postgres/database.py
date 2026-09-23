@@ -1,3 +1,4 @@
+import hashlib
 import os
 import re
 import subprocess
@@ -140,6 +141,9 @@ class Workspace:
     def __init__(self, admin_dsn: str, settings: DatabaseSettings | None = None) -> None:
         self.admin_dsn = admin_dsn
         self.name = f"dbreduce_{uuid.uuid4().hex}"
+        self.lock_key = int.from_bytes(
+            hashlib.sha256(self.name.encode()).digest()[:8], "big", signed=True
+        )
         self.dsn = make_conninfo(admin_dsn, dbname=self.name)
         self.url = database_url(admin_dsn, self.name)
         self.settings = settings
@@ -152,6 +156,8 @@ class Workspace:
         self.close()
         with psycopg.connect(self.admin_dsn, autocommit=True, connect_timeout=10) as conn:
             conn.execute("SET statement_timeout = '600s'")
+            # Keep cleanup behind a CREATE that continues after its client loses the reply.
+            conn.execute("SELECT pg_advisory_lock(%s)", (self.lock_key,))
             statement = sql.SQL("CREATE DATABASE {} TEMPLATE template0").format(
                 sql.Identifier(self.name)
             )
@@ -198,6 +204,7 @@ class Workspace:
             try:
                 with psycopg.connect(self.admin_dsn, autocommit=True, connect_timeout=10) as conn:
                     conn.execute("SET statement_timeout = '600s'")
+                    conn.execute("SELECT pg_advisory_lock(%s)", (self.lock_key,))
                     conn.execute(
                         sql.SQL("DROP DATABASE IF EXISTS {} WITH (FORCE)").format(
                             sql.Identifier(self.name)

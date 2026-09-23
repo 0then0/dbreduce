@@ -3,7 +3,10 @@
 import os
 import shlex
 import shutil
+import socket
 import sys
+import threading
+import time
 import uuid
 from pathlib import Path
 from unittest.mock import patch
@@ -344,9 +347,9 @@ def test_lost_create_reply_cleans_real_database():
         def __exit__(self, *args):
             return self.connection.__exit__(*args)
 
-        def execute(self, query):
+        def execute(self, query, *args, **kwargs):
             nonlocal created_on_server
-            result = self.connection.execute(query)
+            result = self.connection.execute(query, *args, **kwargs)
             if isinstance(query, sql.Composed) and query.as_string().startswith("CREATE DATABASE"):
                 created_on_server = True
                 self.connection.close()
@@ -379,6 +382,131 @@ def test_lost_create_reply_cleans_real_database():
                         sql.Identifier(workspace.name)
                     )
                 )
+
+
+def test_disconnect_while_create_is_waiting_does_not_leave_database():
+    admin = os.environ.get("DBREDUCE_TEST_ADMIN")
+    if not admin:
+        pytest.skip("Set DBREDUCE_TEST_ADMIN")
+    real_connect = psycopg.connect
+    creator = real_connect(admin, autocommit=True)
+    blocker = real_connect(admin, autocommit=True)
+    creator.execute("SET lock_timeout = '30s'")
+    creator_pid = creator.info.backend_pid
+    workspace = Workspace(admin)
+    errors = []
+    connections = 0
+    cleanup_connecting = threading.Event()
+    thread = None
+    name_was_absent = False
+
+    class CreatorConnection:
+        def __enter__(self):
+            creator.__enter__()
+            return self
+
+        def __exit__(self, *args):
+            return creator.__exit__(*args)
+
+        def execute(self, query, *args, **kwargs):
+            return creator.execute(query, *args, **kwargs)
+
+    def connect_for_workspace(*args, **kwargs):
+        nonlocal connections
+        connections += 1
+        if connections == 1:
+            return CreatorConnection()
+        cleanup_connecting.set()
+        return real_connect(*args, **kwargs)
+
+    def run_workspace():
+        try:
+            with workspace:
+                workspace.create()
+        except Exception as error:
+            errors.append(error)
+
+    try:
+        name_was_absent = not creator.execute(
+            "SELECT EXISTS (SELECT 1 FROM pg_database WHERE datname = %s)",
+            (workspace.name,),
+        ).fetchone()[0]
+        assert name_was_absent
+        blocker.execute("BEGIN")
+        try:
+            blocker.execute("LOCK TABLE pg_catalog.pg_database IN ACCESS EXCLUSIVE MODE")
+        except psycopg.errors.InsufficientPrivilege:
+            pytest.skip("Locking pg_database requires superuser access")
+        with patch(
+            "dbreduce.postgres.database.psycopg.connect",
+            side_effect=connect_for_workspace,
+        ):
+            thread = threading.Thread(target=run_workspace, daemon=True)
+            thread.start()
+            deadline = time.monotonic() + 5
+            blocked = False
+            while time.monotonic() < deadline:
+                blocked = blocker.execute(
+                    "SELECT EXISTS (SELECT 1 FROM pg_locks WHERE pid = %s AND NOT granted)",
+                    (creator.info.backend_pid,),
+                ).fetchone()[0]
+                if blocked or not thread.is_alive():
+                    break
+                time.sleep(0.05)
+            assert blocked and thread.is_alive(), errors
+
+            with socket.socket(fileno=os.dup(creator.pgconn.socket)) as connection_socket:
+                connection_socket.shutdown(socket.SHUT_RDWR)
+            assert cleanup_connecting.wait(timeout=5)
+            blocker.execute("ROLLBACK")
+            thread.join(timeout=20)
+        assert not thread.is_alive()
+        assert errors and isinstance(errors[0], psycopg.OperationalError)
+        assert not workspace.created
+        with real_connect(admin) as observer:
+            assert not observer.execute(
+                "SELECT EXISTS (SELECT 1 FROM pg_database WHERE datname = %s)",
+                (workspace.name,),
+            ).fetchone()[0]
+    finally:
+        try:
+            blocker.execute("ROLLBACK")
+        except psycopg.Error:
+            pass
+        blocker.close()
+        if thread is not None:
+            thread.join(timeout=20)
+        if name_was_absent:
+            try:
+                with real_connect(admin, autocommit=True, connect_timeout=10) as cleanup:
+                    cleanup.execute("SET statement_timeout = '10s'")
+                    active_create = (
+                        "SELECT EXISTS (SELECT 1 FROM pg_stat_activity "
+                        "WHERE pid = %s AND state = 'active' AND query LIKE %s)"
+                    )
+                    create_query = f'CREATE DATABASE "{workspace.name}"%'
+                    cleanup.execute(
+                        "SELECT pg_terminate_backend(pid) FROM pg_stat_activity "
+                        "WHERE pid = %s AND state = 'active' AND query LIKE %s",
+                        (creator_pid, create_query),
+                    )
+                    deadline = time.monotonic() + 5
+                    while cleanup.execute(active_create, (creator_pid, create_query)).fetchone()[0]:
+                        assert time.monotonic() < deadline, "CREATE backend did not terminate"
+                        time.sleep(0.05)
+                    cleanup.execute(
+                        sql.SQL("DROP DATABASE IF EXISTS {} WITH (FORCE)").format(
+                            sql.Identifier(workspace.name)
+                        )
+                    )
+            finally:
+                creator.close()
+        else:
+            creator.close()
+        if thread is not None:
+            thread.join(timeout=5)
+        if thread is not None and thread.is_alive():
+            pytest.fail("CREATE worker did not finish after releasing the catalog lock")
 
 
 def test_workspace_cleanup_can_retry_after_connection_failure():

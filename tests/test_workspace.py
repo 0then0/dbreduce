@@ -33,10 +33,19 @@ def test_cleanup_targets_only_generated_database():
     assert name.startswith("dbreduce_")
     assert statements == [
         "SET statement_timeout = '600s'",
+        "SELECT pg_advisory_lock(%s)",
         f'CREATE DATABASE "{name}" TEMPLATE template0',
         "SET statement_timeout = '600s'",
+        "SELECT pg_advisory_lock(%s)",
         f'DROP DATABASE IF EXISTS "{name}" WITH (FORCE)',
     ]
+    lock_calls = [
+        call
+        for call in connection.execute.call_args_list
+        if call.args[0] == "SELECT pg_advisory_lock(%s)"
+    ]
+    assert len(lock_calls) == 2
+    assert lock_calls[0].args[1] == lock_calls[1].args[1]
 
 
 def test_restore_failure_still_drops_created_copy(tmp_path):
@@ -71,7 +80,7 @@ def test_uncertain_create_result_still_attempts_cleanup():
     connection = MagicMock()
     connection.__enter__.return_value = connection
 
-    def execute(query):
+    def execute(query, *_args):
         if hasattr(query, "as_string") and query.as_string().startswith("CREATE DATABASE"):
             raise psycopg.OperationalError("server reply lost")
 
@@ -90,7 +99,7 @@ def test_existing_database_is_never_dropped_after_name_collision():
     connection = MagicMock()
     connection.__enter__.return_value = connection
 
-    def execute(query):
+    def execute(query, *_args):
         if hasattr(query, "as_string") and query.as_string().startswith("CREATE DATABASE"):
             raise psycopg.errors.DuplicateDatabase("already exists")
 
