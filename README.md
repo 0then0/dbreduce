@@ -62,9 +62,11 @@ Outputs default to `dbreduce.min.sql` and `dbreduce-report.json`. Existing files
 never overwritten. Override with `--output` and `--report`. Both files are prepared
 before publication; an error removes results created by the current run. The report includes
 initial/final table and row counts, rows per table, oracle executions, cache hits,
-constraint rejections, confirmation count, elapsed seconds, and `restore_database`,
-the name of the database created by the SQL dump. Tables are kept,
-even when emptied, so the schema remains available to the oracle.
+constraint rejections, `RAISE EXCEPTION` candidate rejections, confirmation count,
+elapsed seconds, and `restore_database`. Rejection counts identify the cause class;
+raw database messages are not stored because they may contain application data. The
+`restore_database` field gives the name of the database created by the SQL dump.
+Tables are kept even when emptied, so the schema remains available to the oracle.
 
 Restore the SQL through a maintenance database using a role with `CREATEDB`:
 
@@ -154,9 +156,9 @@ FK closure and candidate dumps require memory/disk proportional to the dataset.
   10-second timeout. Oracle executions use `--timeout` independently.
 - Do not allow other clients to write into the workspace. Do not use production as
   a workspace. Only generated database names are ever passed to DROP DATABASE.
-- Ordinary failures and Ctrl-C clean up the workspace. A killed process, server
-  outage, or interruption while CREATE DATABASE is still in flight can leave a
-  `dbreduce_<uuid>` database for manual cleanup.
+- Ordinary failures and Ctrl-C attempt to clean up the workspace, including an
+  uncertain CREATE DATABASE result. A killed process or server outage can still
+  leave a `dbreduce_<uuid>` database for manual cleanup.
 - Dumps/reports contain application data. Store them appropriately; no DSN is saved
   in the report. PostgreSQL errors are intentionally summarized without credentials.
 

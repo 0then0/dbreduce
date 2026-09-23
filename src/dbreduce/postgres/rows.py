@@ -7,6 +7,10 @@ from psycopg import sql
 from dbreduce.models.schema import RowKey, Schema, State, TableKey
 
 
+class CandidateRejected(RuntimeError):
+    """A database trigger or function refused a candidate deletion."""
+
+
 def read_rows(
     conn: psycopg.Connection[tuple[Any, ...]], schema: Schema
 ) -> tuple[
@@ -100,6 +104,9 @@ def delete_rows(
         return False
     # All sub-statements share one command boundary for immediate FK checks.
     conn.execute("SET CONSTRAINTS ALL DEFERRED")
-    conn.execute(sql.SQL("WITH {} SELECT 1").format(sql.SQL(", ").join(deletes)), params)
-    conn.execute("SET CONSTRAINTS ALL IMMEDIATE")
+    try:
+        conn.execute(sql.SQL("WITH {} SELECT 1").format(sql.SQL(", ").join(deletes)), params)
+        conn.execute("SET CONSTRAINTS ALL IMMEDIATE")
+    except psycopg.errors.RaiseException as error:
+        raise CandidateRejected("Candidate deletion rejected by PostgreSQL") from error
     return True

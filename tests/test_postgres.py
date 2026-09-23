@@ -336,6 +336,7 @@ def test_trigger_rejection_does_not_stop_reduction(workspace, tmp_path):
 
     assert len(final[("public", "guarded")]) == 1
     assert backend.constraint_rejections == 0
+    assert backend.raise_rejections >= 1
     workspace.reset(snapshot)
     with psycopg.connect(workspace.dsn) as conn:
         assert conn.execute("SELECT id FROM guarded").fetchall() == [(1,)]
@@ -386,7 +387,9 @@ def test_cli_preserves_source_and_exports(workspace, tmp_path):
     )
     assert result.exit_code == 0, result.output
     assert output.exists()
-    assert json.loads(report.read_text())["final_rows"] == 2
+    report_data = json.loads(report.read_text())
+    assert report_data["final_rows"] == 2
+    assert report_data["raise_exception_rejections"] == 0
     dump(workspace.dsn, after, archive=False, restrict_key="TestSourceUnchanged")
     assert before.read_bytes() == after.read_bytes()
 

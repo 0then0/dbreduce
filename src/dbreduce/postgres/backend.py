@@ -8,7 +8,7 @@ from dbreduce.models.schema import RowKey, Schema, State, TableKey
 from dbreduce.oracle.runner import Oracle
 from dbreduce.postgres.database import Workspace
 from dbreduce.postgres.dump import dump
-from dbreduce.postgres.rows import delete_rows, read_rows
+from dbreduce.postgres.rows import CandidateRejected, delete_rows, read_rows
 
 
 class PostgresBackend:
@@ -21,6 +21,7 @@ class PostgresBackend:
         self.oracle = oracle
         self.cache = cache
         self.constraint_rejections = 0
+        self.raise_rejections = 0
         self.restrict_key = uuid.uuid4().hex
         with psycopg.connect(workspace.dsn, connect_timeout=10) as conn:
             self.current, _ = read_rows(conn, schema)
@@ -37,8 +38,8 @@ class PostgresBackend:
         except psycopg.errors.IntegrityConstraintViolation:
             self.constraint_rejections += 1
             return False
-        except psycopg.errors.RaiseException:
-            # A user trigger can reject one deletion without invalidating the run.
+        except CandidateRejected:
+            self.raise_rejections += 1
             return False
         candidate_dump = self.snapshot.with_name("candidate.dump")
         dump(self.workspace.dsn, candidate_dump)

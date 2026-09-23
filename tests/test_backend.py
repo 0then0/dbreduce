@@ -89,3 +89,26 @@ def test_connection_failure_is_not_treated_as_candidate_rejection(tmp_path):
         backend = PostgresBackend(workspace, Schema((), ()), snapshot, MagicMock(), Cache())
         with pytest.raises(psycopg.OperationalError, match="connection lost"):
             backend.attempt(table, baseline[table])
+
+
+def test_raise_exception_outside_deletion_is_not_silenced(tmp_path):
+    table = ("public", "items")
+    baseline = {table: [('{"id":1}', 0)]}
+    connection = MagicMock()
+    connection.__enter__.return_value = connection
+    workspace = MagicMock()
+
+    with (
+        patch("dbreduce.postgres.backend.psycopg.connect", return_value=connection),
+        patch("dbreduce.postgres.backend.read_rows", return_value=(baseline, {})),
+        patch(
+            "dbreduce.postgres.backend.delete_rows",
+            side_effect=psycopg.errors.RaiseException("state inspection failed"),
+        ),
+    ):
+        backend = PostgresBackend(
+            workspace, Schema((), ()), tmp_path / "accepted.dump", MagicMock(), Cache()
+        )
+        with pytest.raises(psycopg.errors.RaiseException, match="state inspection failed"):
+            backend.attempt(table, baseline[table])
+        assert backend.raise_rejections == 0

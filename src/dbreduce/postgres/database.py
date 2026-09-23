@@ -1,6 +1,6 @@
+import os
 import re
 import subprocess
-import tempfile
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
@@ -41,29 +41,35 @@ def read_settings(dsn: str) -> DatabaseSettings:
 
 def read_archive_settings(path: Path) -> DatabaseSettings:
     """Use pg_restore's own CREATE DATABASE statement as archive metadata."""
-    with path.open("rb") as archive, tempfile.TemporaryFile() as generated:
+    with path.open("rb") as archive:
         try:
             result = subprocess.run(
-                ["pg_restore", "--create", "--schema-only", "--file", "-"],
+                [
+                    "pg_restore",
+                    "--create",
+                    "--schema-only",
+                    "--use-list",
+                    os.devnull,
+                    "--file",
+                    "-",
+                ],
                 stdin=archive,
-                stdout=generated,
-                stderr=subprocess.DEVNULL,
+                capture_output=True,
                 timeout=600,
                 check=False,
             )
         except subprocess.TimeoutExpired as error:
             raise ValueError("Timed out reading archive database settings") from error
-        if result.returncode:
-            raise ValueError("Cannot read database settings from custom archive")
-        generated.seek(0)
-        statement = next(
-            (
-                line
-                for line in generated
-                if line.startswith(b"CREATE DATABASE ") and b" WITH TEMPLATE = " in line
-            ),
-            None,
-        )
+    if result.returncode:
+        raise ValueError("Cannot read database settings from custom archive")
+    statement = next(
+        (
+            line
+            for line in result.stdout.splitlines()
+            if line.startswith(b"CREATE DATABASE ") and b" WITH TEMPLATE = " in line
+        ),
+        None,
+    )
     if statement is None:
         raise ValueError("Archive does not expose source database settings")
 
@@ -168,8 +174,14 @@ class Workspace:
                     )
                 elif settings.provider != "c":
                     raise ValueError(f"Unsupported locale provider: {settings.provider}")
-            conn.execute(statement)
+            # CREATE may commit even if its reply is lost; cleanup must still try the name.
             self.created = True
+            try:
+                conn.execute(statement)
+            except psycopg.errors.DuplicateDatabase:
+                # This name existed before our CREATE; it is not ours to drop.
+                self.created = False
+                raise
 
     def reset(self, snapshot: Path) -> None:
         self.create()
@@ -180,7 +192,9 @@ class Workspace:
             with psycopg.connect(self.admin_dsn, autocommit=True, connect_timeout=10) as conn:
                 conn.execute("SET statement_timeout = '600s'")
                 conn.execute(
-                    sql.SQL("DROP DATABASE {} WITH (FORCE)").format(sql.Identifier(self.name))
+                    sql.SQL("DROP DATABASE IF EXISTS {} WITH (FORCE)").format(
+                        sql.Identifier(self.name)
+                    )
                 )
             self.created = False
 

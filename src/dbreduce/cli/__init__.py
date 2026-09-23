@@ -179,6 +179,7 @@ def reduce_command(
                         for schema_name, _ in final
                     },
                     "constraint_rejections": backend.constraint_rejections,
+                    "raise_exception_rejections": backend.raise_rejections,
                     "confirm": confirm,
                     "oracle": "FAIL",
                     "restore_database": workspace.name,
