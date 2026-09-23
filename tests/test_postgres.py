@@ -4,7 +4,9 @@ import os
 import shlex
 import shutil
 import sys
+import uuid
 from pathlib import Path
+from unittest.mock import patch
 
 import psycopg
 import pytest
@@ -272,6 +274,110 @@ def test_archive_settings_with_latin1_identifier(tmp_path):
         settings = read_archive_settings(archive)
     assert settings.encoding == "LATIN1"
     assert settings.lc_collate == settings.lc_ctype == "C"
+
+
+def test_archive_with_newline_database_name_is_rejected_without_writes(tmp_path):
+    from typer.testing import CliRunner
+
+    from dbreduce.cli import app
+
+    admin = os.environ.get("DBREDUCE_TEST_ADMIN")
+    if not admin or not all(shutil.which(tool) for tool in ("pg_dump", "pg_restore")):
+        pytest.skip("Set DBREDUCE_TEST_ADMIN and install PostgreSQL client tools")
+    name = f"dbreduce_{uuid.uuid4().hex}\npart"
+    source_dsn = make_conninfo(admin, dbname=name)
+    archive = tmp_path / "source.dump"
+    with psycopg.connect(admin, autocommit=True) as conn:
+        conn.execute(sql.SQL("CREATE DATABASE {}").format(sql.Identifier(name)))
+    try:
+        with psycopg.connect(source_dsn) as conn:
+            conn.execute("CREATE TABLE source_data (id int)")
+            conn.execute("INSERT INTO source_data VALUES (1)")
+        dump(source_dsn, archive)
+        with pytest.raises(ValueError, match="name containing a newline or carriage return"):
+            read_archive_settings(archive)
+        output = tmp_path / "result.sql"
+        report = tmp_path / "report.json"
+        result = CliRunner().invoke(
+            app,
+            [
+                "reduce",
+                "--dump",
+                str(archive),
+                "--admin-database",
+                admin,
+                "--oracle",
+                "false",
+                "--output",
+                str(output),
+                "--report",
+                str(report),
+            ],
+        )
+        assert result.exit_code == 1
+        assert "database name containing a newline or carriage return" in result.output
+        assert not output.exists() and not report.exists()
+        with psycopg.connect(source_dsn) as conn:
+            assert conn.execute("SELECT id FROM source_data").fetchall() == [(1,)]
+    finally:
+        with psycopg.connect(admin, autocommit=True) as conn:
+            conn.execute(
+                sql.SQL("DROP DATABASE IF EXISTS {} WITH (FORCE)").format(sql.Identifier(name))
+            )
+
+
+def test_lost_create_reply_cleans_real_database():
+    admin = os.environ.get("DBREDUCE_TEST_ADMIN")
+    if not admin:
+        pytest.skip("Set DBREDUCE_TEST_ADMIN")
+    real_connect = psycopg.connect
+    created_on_server = False
+
+    class LostReplyConnection:
+        def __init__(self, connection):
+            self.connection = connection
+
+        def __enter__(self):
+            self.connection.__enter__()
+            return self
+
+        def __exit__(self, *args):
+            return self.connection.__exit__(*args)
+
+        def execute(self, query):
+            nonlocal created_on_server
+            result = self.connection.execute(query)
+            if isinstance(query, sql.Composed) and query.as_string().startswith("CREATE DATABASE"):
+                created_on_server = True
+                raise psycopg.OperationalError("server reply lost")
+            return result
+
+    def connect_with_lost_reply(*args, **kwargs):
+        return LostReplyConnection(real_connect(*args, **kwargs))
+
+    workspace = Workspace(admin)
+    try:
+        with patch(
+            "dbreduce.postgres.database.psycopg.connect", side_effect=connect_with_lost_reply
+        ):
+            with pytest.raises(psycopg.OperationalError, match="server reply lost"):
+                with workspace:
+                    workspace.create()
+        assert created_on_server
+        assert not workspace.created
+        with real_connect(admin) as conn:
+            assert not conn.execute(
+                "SELECT EXISTS (SELECT 1 FROM pg_database WHERE datname = %s)",
+                (workspace.name,),
+            ).fetchone()[0]
+    finally:
+        if created_on_server:
+            with real_connect(admin, autocommit=True) as conn:
+                conn.execute(
+                    sql.SQL("DROP DATABASE IF EXISTS {} WITH (FORCE)").format(
+                        sql.Identifier(workspace.name)
+                    )
+                )
 
 
 def test_reduction_and_oracle_writes_are_isolated(workspace, tmp_path):

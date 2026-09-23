@@ -158,3 +158,17 @@ def test_archive_settings_ignore_non_utf8_schema_text(tmp_path, encoding):
         assert run.call_args.args[0][3:5] == ["--use-list", os.devnull]
     assert settings.encoding == encoding
     assert settings.lc_collate == settings.lc_ctype == "C"
+
+
+def test_archive_with_newline_database_name_reports_pg_restore_rejection(tmp_path):
+    archive = tmp_path / "source.dump"
+    archive.write_bytes(b"PGDMP")
+    with patch("dbreduce.postgres.database.subprocess.run") as run:
+        run.return_value.returncode = 1
+        run.return_value.stderr = (
+            b"pg_restore: error: database name contains a newline or carriage return: "
+            b'"source\\nname"'
+        )
+        with pytest.raises(ValueError, match="name containing a newline or carriage return"):
+            read_archive_settings(archive)
+        assert run.call_args.kwargs["env"]["LC_ALL"] == "C"

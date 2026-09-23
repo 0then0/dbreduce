@@ -56,11 +56,17 @@ def read_archive_settings(path: Path) -> DatabaseSettings:
                 stdin=archive,
                 capture_output=True,
                 timeout=600,
+                env={**os.environ, "LC_ALL": "C"},
                 check=False,
             )
         except subprocess.TimeoutExpired as error:
             raise ValueError("Timed out reading archive database settings") from error
     if result.returncode:
+        if b"database name contains a newline or carriage return" in result.stderr:
+            raise ValueError(
+                "Custom archive has a database name containing a newline or carriage return; "
+                "pg_restore cannot safely read its settings"
+            )
         raise ValueError("Cannot read database settings from custom archive")
     statement = next(
         (

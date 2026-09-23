@@ -54,6 +54,8 @@ With `--database`, the working copy inherits the source database's encoding and
 locale. With `--dump`, DBReduce reads those settings from `pg_restore`'s generated
 CREATE DATABASE statement. An archive that does not expose complete settings is
 rejected before reduction.
+Custom archives whose source database name contains a newline or carriage return
+are rejected because `pg_restore` refuses to read their database settings.
 
 Plain SQL is an output format, not an accepted input format. This avoids executing
 `psql` reconnect/shell meta-commands while restoring user input.
