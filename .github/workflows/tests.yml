@@ -29,4 +29,6 @@ jobs:
       - run: sudo apt-get update && sudo apt-get install -y postgresql-client
       - name: Verify privileged integration tests can run
         run: test "$(psql "$DBREDUCE_TEST_ADMIN" -Atqc "SELECT rolsuper FROM pg_roles WHERE rolname = current_user")" = t
+      - run: uv run --locked ruff check .
+      - run: uv run --locked mypy src
       - run: uv run --locked pytest -q
