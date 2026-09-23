@@ -37,6 +37,9 @@ class PostgresBackend:
         except psycopg.errors.IntegrityConstraintViolation:
             self.constraint_rejections += 1
             return False
+        except psycopg.errors.RaiseException:
+            # A user trigger can reject one deletion without invalidating the run.
+            return False
         candidate_dump = self.snapshot.with_name("candidate.dump")
         dump(self.workspace.dsn, candidate_dump)
         # Compare and fingerprint the state the oracle will actually see after restore.

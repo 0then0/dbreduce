@@ -1,5 +1,8 @@
 from unittest.mock import MagicMock, patch
 
+import psycopg
+import pytest
+
 from dbreduce.cache.store import Cache
 from dbreduce.models.schema import Schema
 from dbreduce.postgres.backend import PostgresBackend
@@ -65,3 +68,24 @@ def test_candidate_rejected_if_restore_returns_deleted_rows(tmp_path):
     assert backend.state() == baseline
     assert snapshot.read_bytes() == b"original"
     oracle.fails.assert_not_called()
+
+
+def test_connection_failure_is_not_treated_as_candidate_rejection(tmp_path):
+    table = ("public", "items")
+    baseline = {table: [('{"id":1}', 0)]}
+    connection = MagicMock()
+    connection.__enter__.return_value = connection
+    workspace = MagicMock()
+    snapshot = tmp_path / "accepted.dump"
+
+    with (
+        patch("dbreduce.postgres.backend.psycopg.connect", return_value=connection),
+        patch("dbreduce.postgres.backend.read_rows", return_value=(baseline, {})),
+        patch(
+            "dbreduce.postgres.backend.delete_rows",
+            side_effect=psycopg.OperationalError("connection lost"),
+        ),
+    ):
+        backend = PostgresBackend(workspace, Schema((), ()), snapshot, MagicMock(), Cache())
+        with pytest.raises(psycopg.OperationalError, match="connection lost"):
+            backend.attempt(table, baseline[table])

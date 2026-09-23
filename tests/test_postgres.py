@@ -304,6 +304,43 @@ def test_reduction_and_oracle_writes_are_isolated(workspace, tmp_path):
     assert oracle.fails(workspace.url, lambda: workspace.reset(restored))
 
 
+def test_trigger_rejection_does_not_stop_reduction(workspace, tmp_path):
+    with psycopg.connect(workspace.dsn) as conn:
+        conn.execute("DELETE FROM child")
+        conn.execute("DELETE FROM parent")
+        conn.execute("CREATE TABLE guarded (id int PRIMARY KEY)")
+        conn.execute("INSERT INTO guarded VALUES (1), (2)")
+        conn.execute("""
+            CREATE FUNCTION reject_guarded_delete() RETURNS trigger LANGUAGE plpgsql AS $$
+            BEGIN
+                IF OLD.id = 1 THEN RAISE EXCEPTION 'protected'; END IF;
+                RETURN OLD;
+            END $$
+        """)
+        conn.execute("""
+            CREATE TRIGGER guard BEFORE DELETE ON guarded
+            FOR EACH ROW EXECUTE FUNCTION reject_guarded_delete()
+        """)
+        schema = inspect_database(conn)
+    snapshot = tmp_path / "accepted.dump"
+    dump(workspace.dsn, snapshot)
+    code = (
+        "import os,sys,psycopg; "
+        "c=psycopg.connect(os.environ['DATABASE_URL']); "
+        "sys.exit(int(c.execute('SELECT EXISTS(SELECT 1 FROM guarded WHERE id=1)').fetchone()[0]))"
+    )
+    oracle = Oracle(f"{shlex.quote(sys.executable)} -c {shlex.quote(code)}")
+    backend = PostgresBackend(workspace, schema, snapshot, oracle, Cache())
+
+    final = reduce(backend, lambda _: None)
+
+    assert len(final[("public", "guarded")]) == 1
+    assert backend.constraint_rejections == 0
+    workspace.reset(snapshot)
+    with psycopg.connect(workspace.dsn) as conn:
+        assert conn.execute("SELECT id FROM guarded").fetchall() == [(1,)]
+
+
 def test_demo_fixture_has_12005_rows(workspace):
     fixture = Path(__file__).parents[1] / "examples" / "fixture.sql"
     workspace.create()

@@ -106,9 +106,12 @@ def test_archive_settings_ignore_non_utf8_schema_text(tmp_path, encoding):
         b"CREATE DATABASE original WITH TEMPLATE = template0 "
         + f"ENCODING = '{encoding}' LOCALE_PROVIDER = libc LOCALE = 'C';\n".encode()
     )
-    with patch("dbreduce.postgres.database.subprocess.run") as run:
-        run.return_value.returncode = 0
-        run.return_value.stdout = stdout
+
+    def write_schema(command, **kwargs):
+        kwargs["stdout"].write(stdout)
+        return subprocess.CompletedProcess(command, 0)
+
+    with patch("dbreduce.postgres.database.subprocess.run", side_effect=write_schema):
         settings = read_archive_settings(archive)
     assert settings.encoding == encoding
     assert settings.lc_collate == settings.lc_ctype == "C"
