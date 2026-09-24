@@ -26,7 +26,7 @@ wheels = [
 
 [[package]]
 name = "dbreduce"
-version = "0.1.0"
+version = "0.1.2"
 source = { editable = "." }
 dependencies = [
     { name = "psycopg", extra = ["binary"] },
