@@ -5,10 +5,10 @@ It works only on a randomly named disposable database and exports a SQL reproduc
 
 ## Install
 
-Download the wheel from the [latest GitHub Release](https://github.com/0then0/dbreduce/releases/latest), then install it:
+Install the latest release from PyPI:
 
 ```bash
-python -m pip install ./dbreduce-*.whl
+python -m pip install dbreduce
 dbreduce --help
 ```
 

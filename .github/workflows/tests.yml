@@ -1,6 +1,14 @@
 name: Tests
 
-on: [push, pull_request]
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Existing GitHub release tag to publish to PyPI
+        required: true
+        type: string
 
 permissions:
   contents: read
@@ -24,6 +32,8 @@ jobs:
       DBREDUCE_TEST_ADMIN: postgresql://postgres@localhost:5432/postgres
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref }}
       - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
       - run: uv python install 3.13
       - run: sudo apt-get update && sudo apt-get install -y postgresql-client
@@ -34,18 +44,22 @@ jobs:
       - run: uv run --locked pytest -q
 
   release:
-    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    if: >-
+      (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')) ||
+      (github.event_name == 'workflow_dispatch' && startsWith(inputs.release_tag, 'v'))
     needs: test
     runs-on: ubuntu-24.04
     permissions:
       contents: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref }}
       - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
       - run: uv python install 3.13
       - name: Check tag matches project version
         env:
-          RELEASE_TAG: ${{ github.ref_name }}
+          RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref_name }}
         run: |
           python - <<'PY'
           import os
@@ -61,17 +75,49 @@ jobs:
       - name: Check wheel installation
         run: uv run --no-project --with dist/*.whl -- dbreduce --help
       - name: Create or resume GitHub Release
+        id: github_release
         env:
           GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref_name }}
         run: |
-          tag="$GITHUB_REF_NAME"
-          if draft_state=$(gh release view "$tag" --json isDraft --jq .isDraft 2>/dev/null); then
+          if draft_state=$(gh release view "$RELEASE_TAG" --json isDraft --jq .isDraft 2>/dev/null); then
             if [ "$draft_state" = "false" ]; then
-              echo "Release $tag is already published"
-              exit 0
+              echo "Release $RELEASE_TAG is already published"
+              echo "already_published=true" >> "$GITHUB_OUTPUT"
             fi
           else
-            gh release create "$tag" --draft --verify-tag --generate-notes
+            gh release create "$RELEASE_TAG" --draft --verify-tag --generate-notes
           fi
-          gh release upload "$tag" dist/* --clobber
-          gh release edit "$tag" --draft=false --verify-tag
+      - name: Upload wheel and source archive to GitHub Release
+        if: steps.github_release.outputs.already_published != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref_name }}
+        run: gh release upload "$RELEASE_TAG" dist/* --clobber
+      - name: Publish GitHub Release
+        if: steps.github_release.outputs.already_published != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref_name }}
+        run: gh release edit "$RELEASE_TAG" --draft=false --verify-tag
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: release-dists
+          path: dist/
+          if-no-files-found: error
+
+  publish:
+    needs: release
+    runs-on: ubuntu-24.04
+    environment:
+      name: pypi
+      url: https://pypi.org/project/dbreduce/
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
+        with:
+          name: release-dists
+          path: dist/
+      - name: Publish distributions to PyPI
+        uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2
