@@ -32,3 +32,46 @@ jobs:
       - run: uv run --locked ruff check .
       - run: uv run --locked mypy src
       - run: uv run --locked pytest -q
+
+  release:
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    needs: test
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+      - run: uv python install 3.13
+      - name: Check tag matches project version
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          python - <<'PY'
+          import os
+          import tomllib
+          from pathlib import Path
+
+          version = tomllib.loads(Path("pyproject.toml").read_text())["project"]["version"]
+          expected = f"v{version}"
+          if os.environ["RELEASE_TAG"] != expected:
+              raise SystemExit(f"Tag must match project version: expected {expected}")
+          PY
+      - run: uv build --out-dir dist
+      - name: Check wheel installation
+        run: uv run --no-project --with dist/*.whl -- dbreduce --help
+      - name: Create or resume GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="$GITHUB_REF_NAME"
+          if draft_state=$(gh release view "$tag" --json isDraft --jq .isDraft 2>/dev/null); then
+            if [ "$draft_state" = "false" ]; then
+              echo "Release $tag is already published"
+              exit 0
+            fi
+          else
+            gh release create "$tag" --draft --verify-tag --generate-notes
+          fi
+          gh release upload "$tag" dist/* --clobber
+          gh release edit "$tag" --draft=false --verify-tag

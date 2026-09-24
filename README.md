@@ -5,10 +5,14 @@ It works only on a randomly named disposable database and exports a SQL reproduc
 
 ## Install
 
+Download the wheel from the [latest GitHub Release](https://github.com/0then0/dbreduce/releases/latest), then install it:
+
 ```bash
-uv sync --dev
-uv run dbreduce --help
+python -m pip install ./dbreduce-*.whl
+dbreduce --help
 ```
+
+DBReduce requires Python 3.13 or newer.
 
 Install PostgreSQL client tools (`pg_dump`, `pg_restore`) matching or newer than the
 server. Use a current, patched release supporting `pg_dump --restrict-key`.
@@ -168,6 +172,7 @@ FK closure and candidate dumps require memory/disk proportional to the dataset.
 ## Development
 
 ```bash
+uv sync --dev
 uv run pytest -m 'not postgres'
 uv run ruff check .
 uv run mypy src
