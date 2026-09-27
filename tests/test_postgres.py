@@ -726,3 +726,68 @@ def test_cli_inspect_reports_fk_graph_without_writes(workspace):
     assert "public.child -> public.parent" in result.output
     with psycopg.connect(workspace.dsn) as conn:
         assert conn.execute("SELECT count(*) FROM parent").fetchone()[0] == 20
+
+
+@pytest.mark.parametrize("composite", [False, True])
+def test_virtual_closure(workspace, tmp_path, composite):
+    import json
+
+    from dbreduce.postgres.relationships import load_relationships
+
+    config = tmp_path / "relationships.json"
+    columns = ["tenant", "id"] if composite else ["id"]
+    config.write_text(
+        json.dumps(
+            {
+                "relationships": [
+                    {
+                        "from": {"table": "semantic_child", "columns": columns},
+                        "to": {"table": "semantic_parent", "columns": columns},
+                    }
+                ]
+            }
+        )
+    )
+    with psycopg.connect(workspace.dsn) as conn:
+        conn.execute("CREATE TABLE semantic_parent (tenant int, id int)")
+        conn.execute("CREATE TABLE semantic_child (tenant int, id int)")
+        conn.execute("INSERT INTO semantic_parent VALUES (1, 1), (2, 1)")
+        conn.execute("INSERT INTO semantic_child VALUES (1, 1), (2, 1), (1, NULL)")
+        schema = load_relationships(conn, inspect_database(conn), config)
+        state, _ = read_rows(conn, schema)
+        delete_rows(
+            conn, schema, ("public", "semantic_parent"), state[("public", "semantic_parent")][:1]
+        )
+        assert conn.execute("SELECT count(*) FROM semantic_child").fetchone()[0] == (
+            2 if composite else 1
+        )
+
+
+def test_different_failure_rejected_with_oracle_writes(workspace, tmp_path):
+    snapshot = tmp_path / "accepted.dump"
+    dump(workspace.dsn, snapshot)
+    with psycopg.connect(workspace.dsn) as conn:
+        schema = inspect_database(conn)
+    code = (
+        "import os,json,psycopg; "
+        "c=psycopg.connect(os.environ['DATABASE_URL']); "
+        "bug=c.execute('SELECT EXISTS(SELECT 1 FROM child WHERE id=7)').fetchone()[0]; "
+        "c.execute('INSERT INTO parent VALUES (999)'); c.commit(); "
+        "print(json.dumps({'reproduced': True, 'signature': 'BUG_A' if bug else 'BUG_B'}))"
+    )
+    oracle = Oracle(
+        f"{shlex.quote(sys.executable)} -c {shlex.quote(code)}", structured=True, confirm=2
+    )
+    assert oracle.fails(workspace.url, lambda: workspace.reset(snapshot))
+    workspace.reset(snapshot)
+    backend = PostgresBackend(workspace, schema, snapshot, oracle, Cache())
+    final = reduce(backend, lambda _: None)
+    assert {key: len(rows) for key, rows in final.items()} == {
+        ("public", "parent"): 1,
+        ("public", "child"): 1,
+    }
+    assert oracle.outcomes["different_failure"] > 0
+    assert oracle.fails(workspace.url, lambda: workspace.reset(snapshot))
+    workspace.reset(snapshot)
+    with psycopg.connect(workspace.dsn) as conn:
+        assert conn.execute("SELECT id FROM parent").fetchall() == [(7,)]

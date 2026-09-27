@@ -57,10 +57,15 @@ def delete_rows(
                 zip(
                     fk.columns,
                     fk.target_columns,
-                    fk.operators,
+                    fk.operators or (("pg_catalog", "="),) * len(fk.columns),
                     strict=True,
                 )
             ):
+                if fk.virtual:
+                    joins.append(
+                        sql.SQL("p.{} = c.{}").format(sql.Identifier(parent), sql.Identifier(child))
+                    )
+                    continue
                 # Operator names come from pg_operator, whose grammar excludes SQL injection.
                 parent_column = sql.SQL("p.{}").format(sql.Identifier(parent))
                 if fk.collations:

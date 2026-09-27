@@ -1,7 +1,7 @@
-"""Exit 1 only when a paid order has a negative total after applying its coupon."""
+"""Structured verdict for a paid order with a negative total after its coupon."""
 
+import json
 import os
-import sys
 
 import psycopg
 
@@ -18,4 +18,4 @@ with psycopg.connect(os.environ["DBREDUCE_DATABASE_URL"]) as conn:
             HAVING sum(i.amount) - c.discount < 0
         )
     """).fetchone()[0]
-sys.exit(1 if bug else 0)
+print(json.dumps({"reproduced": bug, "signature": "checkout-negative-total"}))

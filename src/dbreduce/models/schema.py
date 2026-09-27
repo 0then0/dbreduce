@@ -25,6 +25,7 @@ class ForeignKey:
     target_columns: tuple[str, ...]
     operators: tuple[tuple[str, str], ...]
     collations: tuple[tuple[str, str] | None, ...] = ()
+    virtual: bool = False
 
 
 @dataclass(frozen=True)

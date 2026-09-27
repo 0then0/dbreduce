@@ -1,8 +1,10 @@
 import json
 import os
+import re
 import shutil
 import tempfile
 import time
+from importlib.metadata import version
 from pathlib import Path
 from typing import Annotated
 
@@ -16,6 +18,7 @@ from dbreduce.postgres.backend import PostgresBackend
 from dbreduce.postgres.database import Workspace, read_archive_settings, read_settings
 from dbreduce.postgres.dump import dump
 from dbreduce.postgres.introspection import check_extension_tables, inspect_database
+from dbreduce.postgres.relationships import load_relationships
 from dbreduce.reducer.engine import reduce as reduce_state
 
 app = typer.Typer(
@@ -63,12 +66,15 @@ def require_clients() -> None:
 
 
 @app.command("inspect")
-def inspect_command(database: Annotated[str, typer.Option(help="PostgreSQL source DSN")]) -> None:
+def inspect_command(
+    database: Annotated[str, typer.Option(help="PostgreSQL source DSN")],
+    config: Annotated[Path | None, typer.Option(help="JSON virtual relationships")] = None,
+) -> None:
     """Show tables, exact row counts, keys and dependency graph (read-only)."""
     try:
         with psycopg.connect(database, connect_timeout=10) as conn:
             conn.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY")
-            schema = inspect_database(conn)
+            schema = load_relationships(conn, inspect_database(conn), config)
         for table in schema.tables:
             typer.echo(
                 f"{table.label}\n  rows: {table.rows}\n  pk: {', '.join(table.primary_key) or '-'}"
@@ -76,7 +82,8 @@ def inspect_command(database: Annotated[str, typer.Option(help="PostgreSQL sourc
             for fk in schema.foreign_keys:
                 if fk.child == table.key:
                     typer.echo(
-                        f"  FK {', '.join(fk.columns)} -> {'.'.join(fk.parent)}"
+                        f"  {'virtual' if fk.virtual else 'FK'} {', '.join(fk.columns)}"
+                        f" -> {'.'.join(fk.parent)}"
                         f"({', '.join(fk.target_columns)})"
                     )
         typer.echo("Dependencies (child -> parent):")
@@ -85,7 +92,7 @@ def inspect_command(database: Annotated[str, typer.Option(help="PostgreSQL sourc
                 f"  {'.'.join(child)} -> {', '.join('.'.join(p) for p in sorted(parents)) or '-'}"
             )
         typer.echo(f"Strongly connected components: {components(schema)}")
-    except (ValueError, psycopg.Error) as error:
+    except (OSError, ValueError, psycopg.Error) as error:
         fail(error)
 
 
@@ -101,12 +108,17 @@ def fail(error: Exception) -> None:
 
 @app.command("reduce")
 def reduce_command(
-    oracle: Annotated[str, typer.Option(help="Shell command; nonzero exit reproduces the bug")],
+    oracle: Annotated[str, typer.Option(help="Shell oracle command using DATABASE_URL")],
     database: Annotated[str | None, typer.Option(help="Source PostgreSQL DSN")] = None,
     input_dump: Annotated[
         Path | None, typer.Option("--dump", help="Trusted pg_dump custom-format archive")
     ] = None,
     admin_database: Annotated[str | None, typer.Option(help="DSN with CREATEDB privilege")] = None,
+    config: Annotated[Path | None, typer.Option(help="JSON virtual relationships")] = None,
+    match_stdout: Annotated[str | None, typer.Option(help="Required stdout regex")] = None,
+    match_stderr: Annotated[str | None, typer.Option(help="Required stderr regex")] = None,
+    expected_exit_code: Annotated[int | None, typer.Option()] = None,
+    oracle_json: Annotated[bool, typer.Option(help="Read structured verdict from stdout")] = False,
     confirm: Annotated[int, typer.Option(min=1)] = 1,
     timeout: Annotated[float, typer.Option(min=0.01)] = 60,
     output: Annotated[Path, typer.Option()] = Path("dbreduce.min.sql"),
@@ -122,6 +134,21 @@ def reduce_command(
             raise ValueError("--admin-database is required with --dump")
         if output.resolve() == report.resolve() or output.exists() or report.exists():
             raise ValueError("Output and report must be distinct paths that do not already exist")
+        runner = Oracle(
+            oracle,
+            confirm=confirm,
+            timeout=timeout,
+            match_stdout=match_stdout,
+            match_stderr=match_stderr,
+            expected_exit_code=expected_exit_code,
+            structured=oracle_json,
+        )
+        if runner.mode == "legacy":
+            typer.echo(
+                "Warning: No failure identity matcher configured. Any non-zero exit "
+                "code except infrastructure/signal statuses counts as reproduction.",
+                err=True,
+            )
         require_clients()
         with tempfile.TemporaryDirectory(prefix="dbreduce-") as temporary:
             snapshot = Path(temporary) / "accepted.dump"
@@ -138,31 +165,65 @@ def reduce_command(
                 workspace.reset(snapshot)
                 with psycopg.connect(workspace.dsn, connect_timeout=10) as conn:
                     check_extension_tables(conn)
-                    schema = inspect_database(conn)
+                    schema = load_relationships(conn, inspect_database(conn), config)
                 # Keep one normalized snapshot for all probes.
                 dump(workspace.dsn, snapshot)
                 initial_rows = sum(table.rows for table in schema.tables)
                 typer.echo(f"Initial database: {len(schema.tables)} tables, {initial_rows} rows")
-                runner = Oracle(oracle, confirm=confirm, timeout=timeout)
                 cache = Cache()
                 if not runner.fails(workspace.url, lambda: workspace.reset(snapshot)):
                     raise ValueError(
-                        "Oracle passed on the initial copy; failure does not reproduce"
+                        "Oracle did not reproduce the required failure on the initial copy"
                     )
                 typer.echo("Oracle: FAIL\nReducing tables, row groups and individual rows...")
                 workspace.reset(snapshot)
-                backend = PostgresBackend(workspace, schema, snapshot, runner, cache)
+                backend = PostgresBackend(workspace, schema, snapshot, runner, cache, typer.echo)
                 final = reduce_state(backend, typer.echo)
                 # A fresh uncached final confirmation catches some flaky-oracle failures.
                 if not runner.fails(workspace.url, lambda: workspace.reset(snapshot)):
                     raise ValueError(
-                        "Final oracle confirmation passed; no verified result exported"
+                        "Final oracle identity confirmation failed; no verified result exported"
                     )
                 workspace.reset(snapshot)
                 exported = Path(temporary) / "result.sql"
                 dump(workspace.dsn, exported, archive=False, create_database=True)
                 final_rows = sum(map(len, final.values()))
                 result = {
+                    "dbreduce_version": version("dbreduce"),
+                    "failure_identity": runner.identity_report(),
+                    "oracle_stats": {
+                        "executions": runner.executions,
+                        "confirmations": confirm,
+                        "outcomes": dict(runner.outcomes),
+                    },
+                    "candidate_backend": {"type": "snapshot"},
+                    "candidate_stats": {
+                        "created": backend.probes,
+                        "accepted": backend.accepted,
+                        "rejected": backend.probes - backend.accepted,
+                    },
+                    "relationships": {
+                        "database_fk_count": sum(not fk.virtual for fk in schema.foreign_keys),
+                        "virtual_relationship_count": sum(fk.virtual for fk in schema.foreign_keys),
+                        "virtual": [
+                            {
+                                "from": {"table": list(fk.child), "columns": list(fk.columns)},
+                                "to": {
+                                    "table": list(fk.parent),
+                                    "columns": list(fk.target_columns),
+                                },
+                            }
+                            for fk in schema.foreign_keys
+                            if fk.virtual
+                        ],
+                    },
+                    "performance": {
+                        "elapsed_seconds": time.monotonic() - started,
+                        "oracle_seconds": runner.seconds,
+                        "database_clone_seconds": 0,
+                    },
+                    "minimality": "locally irreducible under attempted transformations",
+                    "transformations": ["tables", "chunks", "single rows", "relationship closure"],
                     "initial_tables": len(schema.tables),
                     "initial_rows": initial_rows,
                     "final_tables": len(final),
@@ -189,5 +250,5 @@ def reduce_command(
                 f"Final: {final_rows} rows, oracle: FAIL, "
                 f"executions: {runner.executions}, cache hits: {cache.hits}"
             )
-    except (OSError, ValueError, RuntimeError, psycopg.Error) as error:
+    except (OSError, ValueError, re.error, RuntimeError, psycopg.Error) as error:
         fail(error)

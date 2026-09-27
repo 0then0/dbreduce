@@ -1,4 +1,5 @@
 import uuid
+from collections.abc import Callable
 from pathlib import Path
 
 import psycopg
@@ -13,13 +14,22 @@ from dbreduce.postgres.rows import CandidateRejected, delete_rows, read_rows
 
 class PostgresBackend:
     def __init__(
-        self, workspace: Workspace, schema: Schema, snapshot: Path, oracle: Oracle, cache: Cache
+        self,
+        workspace: Workspace,
+        schema: Schema,
+        snapshot: Path,
+        oracle: Oracle,
+        cache: Cache,
+        progress: Callable[[str], None] = lambda _: None,
     ) -> None:
+        self.progress = progress
         self.workspace = workspace
         self.schema = schema
         self.snapshot = snapshot
         self.oracle = oracle
         self.cache = cache
+        self.probes = 0
+        self.accepted = 0
         self.constraint_rejections = 0
         self.raise_rejections = 0
         self.restrict_key = uuid.uuid4().hex
@@ -30,15 +40,18 @@ class PostgresBackend:
         return self.current
 
     def attempt(self, table: TableKey, rows: list[RowKey]) -> bool:
+        self.probes += 1
         self.workspace.reset(self.snapshot)
         try:
             with psycopg.connect(self.workspace.dsn, connect_timeout=10) as conn:
                 conn.execute("SET statement_timeout = '600s'")
                 delete_rows(conn, self.schema, table, rows)
         except psycopg.errors.IntegrityConstraintViolation:
+            self.progress("candidate rejected: constraint")
             self.constraint_rejections += 1
             return False
         except CandidateRejected:
+            self.progress("candidate rejected: trigger")
             self.raise_rejections += 1
             return False
         candidate_dump = self.snapshot.with_name("candidate.dump")
@@ -58,7 +71,11 @@ class PostgresBackend:
                 self.workspace.url, lambda: self.workspace.reset(candidate_dump)
             )
             self.cache.results[key] = accepted
+            self.progress(f"candidate: {self.oracle.last_outcome}")
+        else:
+            self.progress(f"candidate: cached ({'accepted' if accepted else 'rejected'})")
         if accepted:
+            self.accepted += 1
             candidate_dump.replace(self.snapshot)
             self.current = candidate
         return accepted

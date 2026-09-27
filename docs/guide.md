@@ -1,0 +1,282 @@
+# DBReduce guide
+
+DBReduce minimizes PostgreSQL datasets while a failing command still reproduces a bug.
+It works only on a randomly named disposable database and exports a SQL reproducer.
+
+## Install
+
+Install the latest release from PyPI:
+
+```bash
+python -m pip install dbreduce
+dbreduce --help
+```
+
+DBReduce requires Python 3.13 or newer.
+
+Install PostgreSQL client tools (`pg_dump`, `pg_restore`) matching or newer than the
+server. Use a current, patched release supporting `pg_dump --restrict-key`.
+The connection used for the workspace needs `CREATEDB` and permission to restore the
+schema. A separate `--admin-database` DSN can supply those privileges. A read-only
+source role is recommended. DBReduce only reads source metadata and uses `pg_dump`;
+it never runs reduction SQL on the source.
+
+## Reduce
+
+```bash
+uv run dbreduce inspect --database postgresql://localhost/app_bug
+uv run dbreduce reduce \
+  --database postgresql://localhost/app_bug \
+  --oracle 'uv run pytest tests/test_checkout.py::test_negative_total' \
+  --confirm 3
+```
+
+The oracle **must connect using `DATABASE_URL` or `DBREDUCE_DATABASE_URL`**. Both point
+to the working copy and are set for every execution. Hardcoded connections and
+external services cannot be redirected or sandboxed by DBReduce. Never point an
+oracle at production. Only run trusted commands and restore trusted dumps: SQL
+functions and triggers may have external effects.
+
+## Failure identity
+
+Use `--match-stderr 'negative total'` or `--match-stdout 'negative total'` to require
+Python regular expressions in the selected stream. Both can be combined; all
+conditions must match. `--expected-exit-code 1` optionally pins the exit status.
+Without that option, matcher mode captures the initial nonzero exit status and
+requires it on every subsequent run. Choose a narrow regex identifying the bug;
+a broad regex can still match unrelated failures. Regex matching uses `search`,
+without implicit multiline or DOTALL flags; inline flags are supported.
+
+Prefer `--oracle-json` when the oracle can explicitly identify the bug. It must
+exit **zero** and write exactly one JSON object to stdout:
+
+```json
+{"reproduced": true, "signature": "checkout-negative-total"}
+```
+
+The first reproduced signature becomes the expected identity. Every later verdict
+must match it exactly. `{"reproduced": false}` means the bug disappeared. A different
+signature is a different failure and rejects the candidate. An `error` field with
+a non-null value signals an infrastructure error. Malformed JSON, missing/invalid
+fields, and nonzero process status in JSON mode abort reduction. Signature must be
+a nonempty string of at most 256 characters. Extra fields are ignored. JSON mode
+cannot be combined with exit/output matchers.
+
+`--confirm N` requires N/N matching verdicts, each starting from a fresh restore.
+The first mismatch rejects the candidate immediately. The initial and final
+confirmation also require N/N; a mismatch there aborts export. This does not prove
+stability of a flaky oracle. Cached outcomes assume determinism within one run.
+
+Timeout, process launch errors, and shell statuses 126 or greater abort the run;
+they never preserve the bug. This conservatively reserves shell command-not-found
+and signal conventions, including application exit codes in that range. A wrapper
+that hides a signal behind another exit code cannot be detected reliably.
+`--timeout` defaults to 60 seconds per execution. Remaining process-group children
+are killed after each execution, including timeout and Ctrl-C.
+
+Without a matcher or JSON mode, legacy mode warns and accepts any nonzero exit
+below 126. DB connection failures and other application setup errors cannot be
+reliably distinguished from bugs from an exit code alone. A regex can have the same
+limitation if an application prints a matching message before failing elsewhere.
+Use JSON verdicts and have the wrapper treat setup failures as infrastructure errors.
+
+Only streams needed for identity matching are captured, through pipes with an enforced
+1 MiB limit per stream. Overflow aborts and kills the oracle process group. Unused
+streams are discarded. No output is written to temporary files.
+No stdout/stderr or raw signature is saved in the report.
+JSON signatures are reported as SHA-256 digests. Matcher mode reports `exit:N`;
+legacy mode reports `any-nonzero`. Configured regexes are included for
+reproducibility: do not embed secrets in them.
+
+The source can also be a PostgreSQL **custom-format archive**:
+
+```bash
+pg_dump --format=custom --no-owner --no-privileges \
+  --file app.dump postgresql://localhost/app_bug
+uv run dbreduce reduce --dump app.dump \
+  --admin-database postgresql://localhost/postgres \
+  --oracle 'uv run python examples/oracle.py' --oracle-json
+```
+
+With `--database`, the working copy inherits the source database's encoding and
+locale. With `--dump`, DBReduce reads those settings from `pg_restore`'s generated
+CREATE DATABASE statement. An archive that does not expose complete settings is
+rejected before reduction.
+Custom archives whose source database name contains a newline or carriage return
+are rejected because `pg_restore` refuses to read their database settings.
+
+Plain SQL is an output format, not an accepted input format. This avoids executing
+`psql` reconnect/shell meta-commands while restoring user input.
+
+Outputs default to `dbreduce.min.sql` and `dbreduce-report.json`. Existing files are
+never overwritten. Override with `--output` and `--report`. Both files are prepared
+before publication; an error removes results created by the current run. The report includes
+initial/final table and row counts, rows per table, oracle executions, cache hits,
+constraint rejections, `RAISE EXCEPTION` candidate rejections, confirmation count,
+elapsed seconds, and `restore_database`. Rejection counts identify the cause class;
+raw database messages are not stored because they may contain application data. The
+`restore_database` field gives the name of the database created by the SQL dump.
+Tables are kept even when emptied, so the schema remains available to the oracle.
+
+Restore the SQL through a maintenance database using a role with `CREATEDB`:
+
+```bash
+psql -X -v ON_ERROR_STOP=1 -d postgres -f dbreduce.min.sql
+```
+
+The dump creates a new `dbreduce_<uuid>` database with the verified encoding and
+locale, then connects to it. Read its name from `restore_database` in the JSON report.
+The restore fails rather than overwriting a database with that name.
+
+## Demo
+
+The fixture contains 12,005 rows across `users`, `orders`, `order_items`, `coupons`,
+and `payments`. A paid order with a coupon greater than its item total triggers the
+bug. The demo oracle returns the explicit identity `checkout-negative-total`.
+
+```bash
+createdb dbreduce_demo
+psql -X -v ON_ERROR_STOP=1 -d dbreduce_demo -f examples/fixture.sql
+uv run dbreduce reduce \
+  --database postgresql://localhost/dbreduce_demo \
+  --oracle 'uv run python examples/oracle.py' --oracle-json --confirm 2
+```
+
+The report shows actual initial/final rows, expected/final signature digests,
+identity preservation and elapsed time. See [benchmark](benchmark.md) for a
+120,005-row version. No v0.2 performance measurements have been recorded yet.
+
+## Virtual relationships
+
+`inspect` and `reduce` accept `--config relationships.json`:
+
+```json
+{
+  "relationships": [
+    {
+      "from": {"table": "public.audit_log", "columns": ["tenant_id", "user_id"]},
+      "to": {"table": "public.users", "columns": ["tenant_id", "id"]}
+    }
+  ]
+}
+```
+
+Unqualified tables resolve to `public`. Use exact table/column names without SQL
+quoting; names containing literal dots are not supported in this small config format.
+Single-column and composite relations are supported. Unknown fields, missing tables,
+invalid columns and incompatible equality operators are rejected before reduction.
+No dependencies are added: config uses standard-library JSON.
+
+Deleting a parent includes matching child rows, transitively alongside database
+FKs, including cycles. Comparisons use PostgreSQL `=` with its normal type and
+collation resolution. NULL key components do not match, like MATCH SIMPLE FKs.
+Targets need not be unique: matching any deleted parent marks a child for deletion.
+This is an explicit deletion policy, not a new PostgreSQL constraint. It does not
+repair preexisting orphans or prevent triggers from creating them. Child deletions
+alone do not delete parents. Virtual relationships are not inferred.
+Conditional/polymorphic relations are deferred; unsupported `where` is rejected.
+
+Inspect labels edges as `FK` or `virtual`, and includes both in dependency graphs
+and strongly connected components (multi-table SCCs indicate cycles; self edges
+are visible in the dependency graph). Reports count each kind separately and
+record virtual endpoints for reproducibility.
+
+## Reports
+
+Existing top-level report keys are retained, including `oracle: "FAIL"`.
+New fields include `dbreduce_version`, `failure_identity`, `oracle_stats`,
+`candidate_backend`, `candidate_stats`, `relationships`, `performance`, `minimality`
+and `transformations`. `oracle_stats.outcomes` counts actual executions by outcome;
+`confirmations` is the configured N, not an additional execution count.
+`candidate_stats.created` counts attempted deletion probes, including constraint
+rejections and cache hits. Accepted/rejected counts partition those completed probes.
+`performance.oracle_seconds` excludes restoration; elapsed time includes all work.
+`database_clone_seconds` is zero for the snapshot backend. Aborted runs publish no
+verified result or success report. Legacy identity preservation only means the
+legacy exit-code policy held; it does not prove that the same bug survived.
+
+## How it works
+
+1. Dump the source consistently and restore it into a random `dbreduce_<uuid>` database.
+2. Discover tables, primary keys, validated foreign keys, row counts and dependencies.
+3. Confirm the initial failure identity; abort if the required verdict does not reproduce.
+4. Try whole-table row sets, then successively smaller chunks, then individual rows.
+5. Expand each candidate along incoming FK edges until a fixed point. This handles
+   self-references and cycles without disabling constraints. Execute all deletes in
+   one SQL statement, defer deferrable constraints, and validate before commit.
+   PostgreSQL constraint violations reject a candidate without running the oracle.
+6. Dump and restore a candidate before reading its row state. Reject it when the
+   restored copy did not shrink. Restore that dump before **every** oracle
+   confirmation, so oracle writes never become part of the accepted state.
+7. Cache the complete candidate SQL snapshot fingerprint, including schema and
+   sequence values. COPY rows are sorted within each table for a stable key. Cache
+   lifetime is one run. Restore the accepted snapshot before each new attempt;
+   repeat passes until none reduce the row count.
+8. Reconfirm the final state without the cache, restore the pristine snapshot, export,
+   and drop the working database.
+
+Full restore per probe remains conservative and expensive. v0.2 favors
+correctness over speed; see [clone backend investigation](isolation.md). It is unsuitable for very large databases: row identities,
+FK closure and candidate dumps require memory/disk proportional to the dataset.
+
+## Boundaries and limitations
+
+- PostgreSQL only; POSIX systems (Linux/macOS) for oracle process-group cleanup.
+- Validated database FKs and explicitly configured virtual relationships are analyzed.
+  Semantic relationships are not inferred. Composite keys, duplicate rows and tables without
+  primary keys are supported using snapshot-local CTIDs and complete row values.
+- Partitioned/inherited/foreign tables and row-level security are explicitly rejected.
+- Extension-owned tables are rejected because `pg_dump` may omit their rows.
+- Triggers run normally and can change the result. Restrictive constraints can prevent
+  otherwise useful reductions. No constraints or security controls are disabled.
+- Results are locally irreducible under the attempted FK-closed deletions, not
+  mathematically minimal. FK closure deliberately deletes dependent rows even for
+  `SET NULL`/`SET DEFAULT` actions, which can miss smaller alternatives.
+- Nondeterministic tests can produce incorrect minimization. `--confirm` mitigates,
+  but does not solve, flakiness. Cached outcomes assume deterministic behavior.
+- The copy preserves schema/data and sequence values, not original database names,
+  ownership, grants, role settings, or external infrastructure. Required roles and
+  extensions must exist on the destination server. Initial confirmation detects
+  some incompatibilities, not unrelated failures.
+- Inline `sslpassword` in a DSN is rejected to keep the TLS-key passphrase out of
+  PostgreSQL client process arguments. Put it in a libpq service file instead.
+- PostgreSQL client operations have a 600-second timeout; connections default to a
+  10-second timeout. Oracle executions use `--timeout` independently.
+- Do not allow other clients to write into the workspace. Do not use production as
+  a workspace. Only generated database names are ever passed to DROP DATABASE.
+- Ordinary failures and Ctrl-C attempt to clean up the workspace, including an
+  uncertain CREATE DATABASE result. A killed process or server outage can still
+  leave a `dbreduce_<uuid>` database for manual cleanup. If cleanup cannot be
+  confirmed, the error reports the exact database name to inspect after recovery.
+- Dumps/reports contain application data. Store them appropriately; no DSN is saved
+  in the report. PostgreSQL errors are intentionally summarized without credentials.
+
+## Development
+
+```bash
+uv sync --dev
+uv run pytest -m 'not postgres'
+uv run ruff check .
+uv run mypy src
+```
+
+Opt-in integration tests create/drop only random disposable databases:
+
+```bash
+DBREDUCE_TEST_ADMIN=postgresql://localhost/postgres uv run pytest -m postgres
+```
+
+They require a PostgreSQL server with `CREATEDB`, `pg_dump`, `pg_restore`, and `psql`.
+They cover FK closure, nondeferrable cycles, oracle-write isolation, reduction,
+duplicate rows, extension-owned tables, locale, and SQL round-trip. The 12,005-row
+example is intended for a manual end-to-end run;
+full reduction is deliberately not part of the default test suite.
+
+## Module interfaces
+
+- `reducer.engine.Backend`: `state()` and `attempt(table, rows)`; no PostgreSQL imports.
+- `postgres`: introspection, FK deletion, snapshot I/O and workspace lifecycle.
+- `oracle.Oracle`: command execution with fresh-state callback for every confirmation.
+- `cache`: fingerprints and per-run outcomes.
+- `graph`: dependencies and strongly connected components for inspection.
+- `cli`: input validation, orchestration, progress and result files.
