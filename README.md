@@ -56,10 +56,44 @@ relationship-closed transformations; DBReduce does not promise a global minimum.
 By default, DBReduce writes `dbreduce.min.sql` and `dbreduce-report.json` and never
 overwrites existing files.
 
+## Real-world validation
+
+DBReduce v0.2.0 was validated against real PostgreSQL databases from Wagtail and
+NetBox:
+
+```text
+Wagtail #9208
+150,706 rows
+    v
+DBReduce
+    v
+3 rows
+
+same failure preserved
+fresh restore verified
+```
+
+```text
+NetBox #17498
+1,335 rows
+    v
+DBReduce
+    v
+2 rows
+
+same failure preserved
+fresh restore verified
+```
+
+See the [real-world validation report](docs/real-world-validation.md) and
+[case studies](docs/cases/) for commands, environment, performance numbers, and
+limitations.
+
 ## Documentation
 
 - [Usage, oracle identity, configuration, safety, and development](docs/guide.md)
 - [Benchmark and demo](docs/benchmark.md)
+- [Real-world validation report](docs/real-world-validation.md)
 - [PostgreSQL isolation investigation](docs/isolation.md)
 
 ## Project links

@@ -51,7 +51,7 @@ Prefer `--oracle-json` when the oracle can explicitly identify the bug. It must
 exit **zero** and write exactly one JSON object to stdout:
 
 ```json
-{"reproduced": true, "signature": "checkout-negative-total"}
+{ "reproduced": true, "signature": "checkout-negative-total" }
 ```
 
 The first reproduced signature becomes the expected identity. Every later verdict
@@ -145,7 +145,7 @@ uv run dbreduce reduce \
 
 The report shows actual initial/final rows, expected/final signature digests,
 identity preservation and elapsed time. See [benchmark](benchmark.md) for a
-120,005-row version. No v0.2 performance measurements have been recorded yet.
+120,005-row version and real-world v0.2 validation measurements.
 
 ## Virtual relationships
 
@@ -155,8 +155,8 @@ identity preservation and elapsed time. See [benchmark](benchmark.md) for a
 {
   "relationships": [
     {
-      "from": {"table": "public.audit_log", "columns": ["tenant_id", "user_id"]},
-      "to": {"table": "public.users", "columns": ["tenant_id", "id"]}
+      "from": { "table": "public.audit_log", "columns": ["tenant_id", "user_id"] },
+      "to": { "table": "public.users", "columns": ["tenant_id", "id"] }
     }
   ]
 }
