@@ -1,5 +1,6 @@
 import shlex
 import sys
+import time
 
 import pytest
 
@@ -163,4 +164,24 @@ def test_timeout_with_captured_output():
     )
     with pytest.raises(OracleError, match="timed out"):
         oracle.fails("postgresql:///test", lambda: None)
+    assert oracle.outcomes["timeout"] == 1
+
+
+def test_supervisor_kills_background_oracle_child(tmp_path):
+    marker = tmp_path / "background-finished"
+    child = command(f"import pathlib,time; time.sleep(0.3); pathlib.Path({str(marker)!r}).touch()")
+    assert Oracle(f"{child} & exit 1").fails("postgresql:///test", lambda: None)
+    time.sleep(0.4)
+    assert not marker.exists()
+
+
+def test_regex_matcher_timeout_is_separate_from_oracle_exit():
+    oracle = Oracle(
+        command("import sys; sys.stdout.write('a' * 28 + '!'); sys.exit(1)"),
+        match_stdout="(a+)+$",
+        timeout=0.2,
+    )
+    with pytest.raises(OracleError, match="timed out"):
+        oracle.fails("postgresql:///test", lambda: None)
+    assert oracle.last_outcome == "timeout"
     assert oracle.outcomes["timeout"] == 1

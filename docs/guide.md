@@ -71,8 +71,9 @@ Timeout, process launch errors, and shell statuses 126 or greater abort the run;
 they never preserve the bug. This conservatively reserves shell command-not-found
 and signal conventions, including application exit codes in that range. A wrapper
 that hides a signal behind another exit code cannot be detected reliably.
-`--timeout` defaults to 60 seconds per execution. Remaining process-group children
-are killed after each execution, including timeout and Ctrl-C.
+`--timeout` defaults to 60 seconds for each oracle execution, including failure
+matcher evaluation. Remaining oracle process-group children are killed after each
+execution, including timeout and Ctrl-C.
 
 Without a matcher or JSON mode, legacy mode warns and accepts any nonzero exit
 below 126. DB connection failures and other application setup errors cannot be
