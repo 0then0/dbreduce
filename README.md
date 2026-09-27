@@ -1,13 +1,30 @@
 # DBReduce
 
-Give DBReduce a PostgreSQL database and a failing test. It reduces the relational
-dataset while preserving **the same bug**, using an explicit failure matcher or
-structured oracle verdict. Results are locally irreducible under the attempted
-relationship-closed deletions, not a guaranteed global minimum.
+**Give DBReduce a PostgreSQL database and a failing test. It finds a smaller
+relational dataset that still reproduces the same bug.**
+
+[![PyPI](https://img.shields.io/pypi/v/dbreduce)](https://pypi.org/project/dbreduce/)
+[![Python](https://img.shields.io/badge/Python-3.13%2B-3776AB)](https://www.python.org/)
+[![License](https://img.shields.io/pypi/l/dbreduce)](LICENSE)
+[![Tests](https://github.com/0then0/dbreduce/actions/workflows/tests.yml/badge.svg?branch=main)](https://github.com/0then0/dbreduce/actions/workflows/tests.yml)
+
+DBReduce reduces PostgreSQL data while checking that each candidate preserves the
+original failure identity. It supports output matchers and structured JSON verdicts,
+keeps oracle writes out of accepted data, and follows both PostgreSQL foreign keys
+and explicitly configured application relationships.
+
+## Quick start
+
+DBReduce requires Python 3.13 or newer, PostgreSQL, and client tools (`pg_dump` and
+`pg_restore`) compatible with your server. Install it with:
 
 ```bash
 python -m pip install dbreduce
+```
 
+Then reduce a database with a test that identifies the bug:
+
+```bash
 dbreduce reduce \
   --database postgresql://localhost/app_bug \
   --oracle 'uv run pytest tests/test_checkout.py::test_negative_total' \
@@ -15,28 +32,40 @@ dbreduce reduce \
   --confirm 3
 ```
 
-Requires Python 3.13+, PostgreSQL, current `pg_dump`/`pg_restore` client tools and a
-workspace role with `CREATEDB`. The oracle must use `DATABASE_URL` or
-`DBREDUCE_DATABASE_URL`, which point to a disposable copy. Use trusted oracles and
-dumps; external connections and side effects are not sandboxed.
+The oracle must connect through `DATABASE_URL` or `DBREDUCE_DATABASE_URL`. DBReduce
+sets both variables to its disposable workspace for every run. Use a database role
+with `CREATEDB` permission. The source database is read only; reductions and oracle
+executions run against a generated copy. Use trusted commands and dumps: SQL
+functions, triggers, and external services can have effects outside that copy.
 
-- **Failure identity:** stdout/stderr regexes, exit status, or JSON verdict with a signature.
-- **Isolation:** oracle writes never enter accepted snapshots or exported data.
-- **Relationships:** real FKs and explicit single-column/composite virtual relationships.
-- **Inspection:** row counts, keys, dependency graphs and strongly connected components.
-- **Reports:** identity, outcomes, candidate/cache statistics and timings, without raw logs.
+For an oracle that can report a stable signature directly, use `--oracle-json` and
+have it write `{"reproduced": true, "signature": "checkout-negative-total"}` to
+stdout. See the guide for the verdict protocol and safety details.
 
-Without an identity matcher, the compatible legacy mode warns that unrelated
-nonzero failures may count as reproduction. Timeouts and detectable infrastructure
-errors abort. v0.2 retains the conservative snapshot backend; fast cloning is deferred.
+## What it does
 
-Outputs: `dbreduce.min.sql` and `dbreduce-report.json`. Existing files are never
-overwritten. DBReduce reads the source and reduces only its generated workspace.
+- Checks failure identity so an unrelated error does not count as reproducing the bug.
+- Isolates each oracle run so its database writes do not affect later candidates.
+- Reduces through real foreign keys and declared single or composite relationships.
+- Reports the final identity, candidate outcomes, timings, and row counts without
+  saving raw oracle output.
+
+Without an identity matcher, legacy mode accepts any nonzero application exit status
+and prints a warning. The result is locally irreducible under attempted
+relationship-closed transformations; DBReduce does not promise a global minimum.
+By default, DBReduce writes `dbreduce.min.sql` and `dbreduce-report.json` and never
+overwrites existing files.
 
 ## Documentation
 
-- [Usage, identity protocol, config, safety and development](docs/guide.md)
-- [Reproducible 120,005-row benchmark and demo](docs/benchmark.md)
-- [PostgreSQL cloning investigation and v0.2 decision](docs/isolation.md)
+- [Usage, oracle identity, configuration, safety, and development](docs/guide.md)
+- [Benchmark and demo](docs/benchmark.md)
+- [PostgreSQL isolation investigation](docs/isolation.md)
 
-Licensed under Apache-2.0.
+## Project links
+
+- [Repository](https://github.com/0then0/dbreduce)
+- [Issues](https://github.com/0then0/dbreduce/issues)
+- [PyPI](https://pypi.org/project/dbreduce/)
+
+Licensed under [Apache-2.0](LICENSE).
