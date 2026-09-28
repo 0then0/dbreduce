@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/dbreduce-icon.svg" width="80" height="80" alt="DBReduce logo">
+  <img src="https://raw.githubusercontent.com/0then0/dbreduce/main/docs/dbreduce-icon.svg" width="80" height="80" alt="DBReduce logo">
 </p>
 
 <h1 align="center">DBReduce</h1>
