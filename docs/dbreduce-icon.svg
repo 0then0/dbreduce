@@ -1,0 +1,27 @@
+<svg
+  xmlns="http://www.w3.org/2000/svg"
+  viewBox="0 0 64 64"
+  role="img"
+  aria-labelledby="title desc"
+>
+  <title id="title">DBReduce</title>
+  <desc
+    id="desc"
+  >A relational graph reduced while retaining its highlighted node.</desc>
+  <g
+    fill="none"
+    stroke="#4f6975"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+    stroke-width="3"
+  >
+    <path d="M11 19 21 29M11 45 21 35M8 21v22" />
+    <path d="M30 32h8m-3-3 3 3-3 3" />
+    <path d="M47 26 53 39" />
+    <circle cx="8" cy="16" r="4" fill="#fff" />
+    <circle cx="8" cy="48" r="4" fill="#fff" />
+    <circle cx="24" cy="32" r="5" fill="#d86b4a" stroke="#d86b4a" />
+    <circle cx="45" cy="22" r="5" fill="#d86b4a" stroke="#d86b4a" />
+    <circle cx="55" cy="43" r="4" fill="#fff" />
+  </g>
+</svg>

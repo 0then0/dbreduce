@@ -1,4 +1,4 @@
-# DBReduce
+# <img src="docs/dbreduce-icon.svg" width="36" height="36" alt=""> DBReduce
 
 **Give DBReduce a PostgreSQL database and a failing test. It finds a smaller
 relational dataset that still reproduces the same bug.**
@@ -97,6 +97,8 @@ fresh restore verified
 See the [real-world validation report](docs/real-world-validation.md) and
 [case studies](docs/cases/) for commands, environment, performance numbers, and
 limitations.
+
+See [CHANGELOG.md](CHANGELOG.md) for release history.
 
 ## Documentation
 
