@@ -1,6 +1,14 @@
 # Changelog
 
-Notable user-facing changes for each published version.
+Notable user-facing changes.
+
+## [0.4.0] - Unreleased
+
+- Add opt-in `--reduce-schema` after row reduction. Whole application tables and
+  their automatic restore dependencies are removed only after a clean candidate
+  restore and matching oracle verdict.
+- Include schema counts, candidate outcomes, plain SQL sizes, and schema-phase
+  timings in reports; show schema search-space counts in `inspect`.
 
 ## [0.3.1] - 2026-09-28
 

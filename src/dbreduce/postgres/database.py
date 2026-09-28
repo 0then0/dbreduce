@@ -245,10 +245,10 @@ class Workspace:
                 ) from error
             raise
 
-    def reset(self, snapshot: Path) -> None:
+    def reset(self, snapshot: Path, *, use_list: Path | None = None) -> None:
         self.create()
         with self.performance.measure("restore"):
-            restore(self.dsn, snapshot, jobs=self.restore_jobs)
+            restore(self.dsn, snapshot, jobs=self.restore_jobs, use_list=use_list)
 
     def close(self) -> None:
         if self.created:

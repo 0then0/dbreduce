@@ -40,6 +40,15 @@ archive into a fresh database from `template0`, confirms the same failure
 identity, and exports plain SQL. It publishes only after these checks and
 cleanup succeed.
 
+With `--reduce-schema`, either row backend hands its accepted state to a separate
+logical schema phase. The phase uses `pg_restore --list` and `--use-list` to build
+table-removal candidates in DBReduce-owned databases. PostgreSQL automatic and
+internal dependencies plus foreign keys referring to removed tables determine
+which TOC entries are omitted. Restore failure rejects a candidate before the
+oracle. Every oracle confirmation starts from a fresh restore of the candidate
+archive, so oracle writes do not enter the accepted state. A final logical dump,
+fresh restore, and uncached oracle confirmation precede SQL publication.
+
 ## PostgreSQL strategies
 
 The clone default is `WAL_LOG`; `FILE_COPY` is selected with

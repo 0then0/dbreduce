@@ -6,6 +6,41 @@ from psycopg import sql
 from dbreduce.models.schema import ForeignKey, Schema, Table
 
 
+def inspect_schema_counts(conn: psycopg.Connection[tuple[Any, ...]]) -> dict[str, int]:
+    """Small read-only overview of the application schema search space."""
+    queries = {
+        "tables": """SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
+            WHERE c.relkind='r' AND n.nspname <> 'information_schema' AND n.nspname !~ '^pg_'""",
+        "indexes": """SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
+            WHERE c.relkind IN ('i','I') AND n.nspname <> 'information_schema'
+              AND n.nspname !~ '^pg_'""",
+        "constraints": """SELECT count(*) FROM pg_constraint c
+            JOIN pg_namespace n ON n.oid=c.connamespace
+            WHERE n.nspname <> 'information_schema' AND n.nspname !~ '^pg_'""",
+        "views": """SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
+            WHERE c.relkind='v' AND n.nspname <> 'information_schema' AND n.nspname !~ '^pg_'""",
+        "materialized_views": """SELECT count(*) FROM pg_class c
+            JOIN pg_namespace n ON n.oid=c.relnamespace
+            WHERE c.relkind='m' AND n.nspname <> 'information_schema' AND n.nspname !~ '^pg_'""",
+        "functions": """SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace
+            WHERE p.prokind='f' AND n.nspname <> 'information_schema' AND n.nspname !~ '^pg_'""",
+        "procedures": """SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace
+            WHERE p.prokind='p' AND n.nspname <> 'information_schema' AND n.nspname !~ '^pg_'""",
+        "triggers": """SELECT count(*) FROM pg_trigger t JOIN pg_class c ON c.oid=t.tgrelid
+            JOIN pg_namespace n ON n.oid=c.relnamespace
+            WHERE NOT t.tgisinternal AND n.nspname <> 'information_schema'
+              AND n.nspname !~ '^pg_'""",
+        "sequences": """SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
+            WHERE c.relkind='S' AND n.nspname <> 'information_schema' AND n.nspname !~ '^pg_'""",
+    }
+    counts = {}
+    for name, query in queries.items():
+        row = conn.execute(query).fetchone()
+        assert row is not None
+        counts[name] = int(row[0])
+    return counts
+
+
 def check_extension_tables(conn: psycopg.Connection[tuple[Any, ...]]) -> None:
     conn.execute("SET LOCAL statement_timeout = '600s'")
     found = conn.execute("""

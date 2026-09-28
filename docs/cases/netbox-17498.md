@@ -1,5 +1,35 @@
 # NetBox issue #17498
 
+## Opt-in schema validation (development v0.4)
+
+On 2026-09-28, the public NetBox 4.1 demo SQL was restored again, and the
+duplicate-manufacturer issue condition was added with NetBox v4.1.1. The real
+form oracle reproduced the issue on 21,381 rows in 180 tables. A full
+`--candidate-backend clone --reduce-schema --oracle-json --confirm 2` run on
+PostgreSQL 17.11 produced:
+
+| Measure                      |          Before |        After |
+| ---------------------------- | --------------: | -----------: |
+| Rows                         |          21,381 |            2 |
+| Tables                       |             180 |            4 |
+| Indexes                      |             875 |           16 |
+| Constraints                  |             869 |           14 |
+| Sequences                    |             178 |            4 |
+| Non-data archive TOC entries |           1,577 |           27 |
+| Plain logical SQL            | 2,738,171 bytes | 11,965 bytes |
+
+The four retained tables are `dcim_manufacturer`, `django_content_type`,
+`extras_customfield`, and `extras_customfield_object_types`. The schema phase
+attempted 83 candidates and accepted 13; it took 403.791 seconds of the
+698.040-second run. On 70 candidates, the application oracle exited before
+providing a structured verdict. DBReduce rejected all of them as oracle
+infrastructure errors. Its report does not claim local irreducibility for this
+NetBox result. The final identity matched after DBReduce's fresh logical restore.
+The published SQL was also loaded with `psql` into a separate PostgreSQL 17
+database; the same NetBox form oracle returned the original signature. This
+uses the public demo dataset plus the issue condition, not the unavailable
+reporter's database.
+
 ## Project
 
 - Project: [netbox-community/netbox](https://github.com/netbox-community/netbox)

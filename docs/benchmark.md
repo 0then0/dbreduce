@@ -1,5 +1,35 @@
 # Benchmark
 
+For opt-in schema runs, record `initial_sql_bytes`, `final_sql_bytes`,
+`schema_reduction.initial` and `.final`, and
+`schema_reduction.candidates` from the JSON report. These SQL byte counts use
+the same plain dump format. `performance.phases.schema_reduction` measures the
+added schema phase; nested planning, restore, and oracle timings must not be
+summed with it. The v0.3 measurements below use data-only mode.
+
+## v0.4 opt-in schema runs
+
+On 2026-09-28, complete clone-backend runs with `--reduce-schema` and two
+structured-oracle confirmations were performed on PostgreSQL 17.11. Both
+published SQL files were separately restored with `psql` and reproduced the
+same application oracle signature.
+
+| Case          |        Rows |  Tables |    Plain SQL bytes | Schema phase |    Total |
+| ------------- | ----------: | ------: | -----------------: | -----------: | -------: |
+| Wagtail #9208 | 150,706 → 3 |  48 → 1 | 11,823,405 → 3,714 |      67.096s | 179.984s |
+| NetBox #17498 |  21,381 → 2 | 180 → 4 | 2,738,171 → 11,965 |     403.791s | 698.040s |
+
+The NetBox schema search had 70 oracle infrastructure errors and does not
+claim local irreducibility. The Wagtail run did. These are individual
+end-to-end measurements, not repeated performance comparisons. The Wagtail
+and NetBox cases describe the datasets and oracle limits.
+
+The v0.4 data-only control on the same Wagtail source, with the clone backend,
+`--confirm 2`, and no concurrent integration tests, took 55.229s. It retained
+48 tables, reduced 150,706 rows to 3, and used 36 oracle executions. The v0.3
+clone median below was 59.610s. One v0.4 run establishes functional parity;
+it is not enough to claim a performance improvement.
+
 ## v0.3 Wagtail comparison
 
 Repeated on 2026-09-28 with DBReduce source at commit `6c10073` (Python source

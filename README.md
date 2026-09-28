@@ -6,7 +6,7 @@
 
 <p align="center">
   <strong>Give DBReduce a PostgreSQL database and a failing test.<br>
-  It finds a smaller relational dataset that still reproduces the same bug.</strong>
+  It finds a smaller relational dataset and can reduce its schema while preserving the bug.</strong>
 </p>
 
 <p align="center">
@@ -55,6 +55,12 @@ Version 0.3.0 adds `--oracle-framed-json` for applications that log to stdout,
 opt-in PostgreSQL 17/18 `--candidate-backend clone`. Snapshot isolation remains
 the default. Clone mode verifies a final logical restore before publishing SQL.
 
+Version 0.4.0 provides opt-in whole-table schema reduction with `--reduce-schema`.
+It runs after row reduction, checks each proposed removal with
+the same oracle, and exports only after a fresh logical restore. The default
+data-only behavior is unchanged. Use `--oracle-json` or `--oracle-framed-json` so
+an application startup error cannot count as the original bug.
+
 ## What it does
 
 - Checks failure identity so an unrelated error does not count as reproducing the bug.
@@ -62,6 +68,8 @@ the default. Clone mode verifies a final logical restore before publishing SQL.
 - Reduces through real foreign keys and declared single or composite relationships.
 - Reports the final identity, candidate outcomes, timings, and row counts without
   saving raw oracle output.
+- With `--reduce-schema`, tries removal of application tables and their automatic
+  dependencies; reports schema object counts and logical SQL size.
 
 Without an identity matcher, legacy mode accepts any nonzero application exit status
 and prints a warning. The result is locally irreducible under attempted
@@ -71,36 +79,30 @@ overwrites existing files.
 
 ## Real-world validation
 
-DBReduce v0.2.0 and v0.3.0 were validated with real Wagtail and NetBox schemas and
-application oracles. Wagtail's surrounding data was generated application noise,
-not a production dump. The 1,335-row NetBox database was reconstructed; the issue
-author's exact dump is unavailable. A separate v0.3.0 run used the official NetBox
-4.1 demo dump as a public alternative and passed a fresh restore check. NetBox
-validation exercised its form path, not a full HTTP flow:
+The opt-in v0.4 schema phase was validated with real Wagtail and NetBox
+application oracles on PostgreSQL 17. Wagtail used generated application noise;
+NetBox used the public 4.1 demo dataset with the issue condition added:
 
 ```text
 Wagtail #9208
-150,706 rows
-    v
-DBReduce
-    v
-3 rows
-
-same failure preserved
-fresh restore verified
+Rows:             150,706 -> 3
+Tables:           48 -> 1
+Failure identity: preserved
+Fresh SQL restore: PASS
 ```
 
 ```text
 NetBox #17498
-1,335 rows
-    v
-DBReduce
-    v
-2 rows
-
-same failure preserved
-fresh restore verified
+Rows:             21,381 -> 2
+Tables:           180 -> 4
+Failure identity: preserved
+Fresh SQL restore: PASS
 ```
+
+Seventy NetBox schema candidates exited before the structured oracle verdict;
+the NetBox report therefore does not claim local irreducibility. NetBox
+validation exercised its form path, not a full HTTP flow. Earlier v0.2/v0.3
+data-only results remain documented in the case reports.
 
 See the [real-world validation report](docs/real-world-validation.md) and
 [case studies](docs/cases/) for commands, environment, performance numbers, and

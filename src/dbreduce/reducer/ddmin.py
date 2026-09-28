@@ -1,9 +1,7 @@
 from collections.abc import Iterator
 
-from dbreduce.models.schema import RowKey
 
-
-def chunks(rows: list[RowKey], size: int) -> Iterator[list[RowKey]]:
+def chunks[T](rows: list[T], size: int) -> Iterator[list[T]]:
     for start in range(0, len(rows), size):
         yield rows[start : start + size]
 

@@ -5,13 +5,13 @@ import shutil
 import tempfile
 import time
 from contextlib import ExitStack
-from importlib.metadata import version
 from pathlib import Path
 from typing import Annotated
 
 import psycopg
 import typer
 
+from dbreduce import __version__
 from dbreduce.cache.store import Cache
 from dbreduce.graph.dependencies import components, dependencies
 from dbreduce.oracle.runner import Oracle
@@ -20,9 +20,14 @@ from dbreduce.postgres.backend import CloneBackend, PostgresBackend
 from dbreduce.postgres.clone import CloneStore, check_clone_source
 from dbreduce.postgres.database import Workspace, read_archive_settings, read_settings
 from dbreduce.postgres.dump import dump
-from dbreduce.postgres.introspection import check_extension_tables, inspect_database
+from dbreduce.postgres.introspection import (
+    check_extension_tables,
+    inspect_database,
+    inspect_schema_counts,
+)
 from dbreduce.postgres.relationships import load_relationships
 from dbreduce.postgres.rows import read_rows
+from dbreduce.postgres.schema_reduction import SchemaReducer, archive_objects, schema_counts
 from dbreduce.reducer.engine import reduce as reduce_state
 
 app = typer.Typer(
@@ -79,6 +84,10 @@ def inspect_command(
         with psycopg.connect(database, connect_timeout=10) as conn:
             conn.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY")
             schema = load_relationships(conn, inspect_database(conn), config)
+            schema_counts = inspect_schema_counts(conn)
+        typer.echo("Schema: " + ", ".join(
+            f"{name.replace('_', ' ')}: {count}" for name, count in schema_counts.items()
+        ))
         for table in schema.tables:
             typer.echo(
                 f"{table.label}\n  rows: {table.rows}\n  pk: {', '.join(table.primary_key) or '-'}"
@@ -138,6 +147,9 @@ def reduce_command(
     ] = None,
     confirm: Annotated[int, typer.Option(min=1)] = 1,
     timeout: Annotated[float, typer.Option(min=0.01)] = 60,
+    reduce_schema: Annotated[
+        bool, typer.Option(help="Also reduce whole application tables after row reduction")
+    ] = False,
     output: Annotated[Path, typer.Option()] = Path("dbreduce.min.sql"),
     report: Annotated[Path, typer.Option()] = Path("dbreduce-report.json"),
 ) -> None:
@@ -175,6 +187,12 @@ def reduce_command(
                 "code except infrastructure/signal statuses counts as reproduction.",
                 err=True,
             )
+            if reduce_schema:
+                typer.echo(
+                    "Warning: Schema reduction with legacy any-nonzero oracle can accept "
+                    "application startup failures. Use --oracle-json or --oracle-framed-json.",
+                    err=True,
+                )
         require_clients()
         with tempfile.TemporaryDirectory(prefix="dbreduce-") as temporary:
             snapshot = Path(temporary) / "accepted.dump"
@@ -201,6 +219,17 @@ def reduce_command(
                 # Keep one normalized snapshot for all probes.
                 with performance.measure("initial_normalization_dump"):
                     dump(workspace.dsn, snapshot)
+                initial_sql_bytes: int | None = None
+                initial_schema_counts: dict[str, int] | None = None
+                if reduce_schema:
+                    initial_sql = Path(temporary) / "initial.sql"
+                    with performance.measure("initial_logical_export"):
+                        dump(workspace.dsn, initial_sql, archive=False, create_database=True)
+                    initial_sql_bytes = initial_sql.stat().st_size
+                    with psycopg.connect(workspace.dsn, connect_timeout=10) as conn:
+                        initial_schema_counts = schema_counts(
+                            conn, archive_objects(snapshot)[1]
+                        )
                 initial_rows = sum(table.rows for table in schema.tables)
                 typer.echo(f"Initial database: {len(schema.tables)} tables, {initial_rows} rows")
                 cache = Cache()
@@ -258,6 +287,25 @@ def reduce_command(
                                 "Final logical restore changed candidate state; "
                                 "no verified result exported"
                             )
+                    schema_reducer: SchemaReducer | None = None
+                    if reduce_schema:
+                        typer.echo("Reducing whole application tables...")
+                        schema_archive = Path(temporary) / "schema-accepted.dump"
+                        with performance.measure("schema_data_normalization"):
+                            workspace.reset(final_archive)
+                            dump(workspace.dsn, schema_archive)
+                        schema_reducer = SchemaReducer(
+                            workspace, schema_archive, runner, performance, typer.echo,
+                            initial_schema_counts,
+                        )
+                        with performance.measure("schema_reduction"):
+                            final_archive = schema_reducer.run()
+                        normalized_archive = Path(temporary) / "schema-final.dump"
+                        with performance.measure("final_logical_normalization"):
+                            workspace.reset(final_archive)
+                            dump(workspace.dsn, normalized_archive)
+                            workspace.reset(normalized_archive)
+                        final_archive = normalized_archive
                     # A fresh uncached final confirmation catches flaky-oracle failures.
                     if not runner.fails(
                         workspace.url, lambda: workspace.reset(final_archive)
@@ -271,6 +319,10 @@ def reduce_command(
                 exported = Path(temporary) / "result.sql"
                 with performance.measure("final_export"):
                     dump(workspace.dsn, exported, archive=False, create_database=True)
+                if reduce_schema:
+                    with psycopg.connect(workspace.dsn, connect_timeout=10) as conn:
+                        final_schema = inspect_database(conn)
+                        final, _ = read_rows(conn, final_schema)
                 with psycopg.connect(admin, connect_timeout=10) as conn:
                     version_row = conn.execute("SHOW server_version").fetchone()
                     assert version_row is not None
@@ -290,7 +342,7 @@ def reduce_command(
                 }
                 final_rows = sum(map(len, final.values()))
                 result = {
-                    "dbreduce_version": version("dbreduce"),
+                    "dbreduce_version": __version__,
                     "failure_identity": runner.identity_report(),
                     "oracle_stats": {
                         "executions": runner.executions,
@@ -364,6 +416,19 @@ def reduce_command(
                     "oracle": "FAIL",
                     "restore_database": workspace.name,
                 }
+                if schema_reducer is not None:
+                    schema_report = schema_reducer.report()
+                    result["schema_reduction"] = schema_report
+                    result["minimality_by_phase"] = {
+                        "data": {"locally_irreducible": True},
+                        "schema": schema_report["minimality"],
+                    }
+                    result["initial_sql_bytes"] = initial_sql_bytes
+                    result["final_sql_bytes"] = exported.stat().st_size
+                    result["final_tables"] = len(final)
+                    transformations = result["transformations"]
+                    assert isinstance(transformations, list)
+                    result["transformations"] = [*transformations, "whole_table_removal"]
                 result["database_stats"] = {
                     "clone_attempts": store.clone_attempts if store is not None else 0,
                     "clone_failures": store.clone_failures if store is not None else 0,

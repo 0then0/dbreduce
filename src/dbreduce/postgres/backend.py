@@ -61,7 +61,8 @@ class PostgresBackend:
             self.progress("candidate rejected: trigger")
             self.raise_rejections += 1
             return False
-        candidate_dump = self.snapshot.with_name("candidate.dump")
+        # A fresh name also avoids stale bind-mount entries after an accepted dump is moved.
+        candidate_dump = self.snapshot.with_name(f"candidate-{self.probes}.dump")
         with self.performance.measure("candidate_dump"):
             dump(self.workspace.dsn, candidate_dump)
         # Compare and fingerprint the state the oracle will actually see after restore.
@@ -71,6 +72,7 @@ class PostgresBackend:
             with self.performance.measure("candidate_state_read"):
                 candidate, _ = read_rows(conn, self.schema)
         if sum(map(len, candidate.values())) >= sum(map(len, self.current.values())):
+            candidate_dump.unlink(missing_ok=True)
             return False
         fingerprint_dump = self.snapshot.with_name("fingerprint.sql")
         with self.performance.measure("fingerprint_dump"):
@@ -93,6 +95,8 @@ class PostgresBackend:
             self.accepted += 1
             candidate_dump.replace(self.snapshot)
             self.current = candidate
+        else:
+            candidate_dump.unlink(missing_ok=True)
         return accepted
 
 

@@ -5,8 +5,10 @@ from unittest.mock import MagicMock, patch
 import psycopg
 import pytest
 
+from dbreduce.performance import Performance
 from dbreduce.postgres.database import Workspace, read_archive_settings
-from dbreduce.postgres.dump import client, restore
+from dbreduce.postgres.dump import ClientError, client, restore
+from dbreduce.postgres.schema_reduction import SchemaReducer
 
 
 def test_plain_sql_rejected_before_any_external_command(tmp_path):
@@ -222,6 +224,23 @@ def test_database_client_error_classified_without_leaking_details():
         with pytest.raises(RuntimeError, match="authentication failed") as error:
             client(["pg_dump"], "dbname=test password=syntheticsecret")
     assert "syntheticsecret" not in str(error.value)
+
+
+def test_schema_restore_infrastructure_error_aborts_candidate(tmp_path):
+    workspace = MagicMock()
+    workspace.reset.side_effect = ClientError(
+        "pg_restore", "check PostgreSQL client and server logs", 1
+    )
+    reducer = SchemaReducer(
+        workspace, tmp_path / "accepted.dump", MagicMock(), Performance(), lambda _: None
+    )
+    with pytest.raises(ClientError):
+        reducer._attempt(
+            tmp_path / "plan.dump", b"1; 1 1 TABLE public example postgres\n",
+            {("public", "example"): {1}}, {("public", "example")},
+        )
+    assert reducer.outcomes["oracle_infrastructure_error"] == 1
+    assert reducer.outcomes["invalid_schema"] == 0
 
 
 @pytest.mark.parametrize("encoding", ["LATIN1", "SQL_ASCII"])

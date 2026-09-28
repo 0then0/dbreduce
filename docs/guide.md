@@ -1,6 +1,7 @@
 # DBReduce guide
 
 DBReduce minimizes PostgreSQL datasets while a failing command still reproduces a bug.
+An opt-in phase also removes whole application tables when the same failure survives.
 It works only on a randomly named disposable database and exports a SQL reproducer.
 
 ## Install
@@ -30,6 +31,24 @@ uv run dbreduce reduce \
   --oracle 'uv run pytest tests/test_checkout.py::test_negative_total' \
   --confirm 3
 ```
+
+Use `--reduce-schema` to run whole-table schema reduction after the usual row
+reduction. This mode uses a logical custom archive and fresh restore for schema
+candidates even when row reduction uses `--candidate-backend clone`. It removes
+table data, owned sequences, indexes, defaults, triggers, constraints, and foreign
+keys that cannot survive removal of a referenced table. Each accepted candidate
+must restore cleanly and reproduce the original oracle identity. Views and other
+objects with dependencies not covered by this closure can make a candidate
+invalid; those tables remain. Columns, standalone indexes, constraints, functions,
+procedures, extensions, and namespaces are not independent reduction targets.
+
+Prefer `--oracle-json` or `--oracle-framed-json` in this mode. A structured
+`{"reproduced": false}` or a different signature rejects a candidate. A structured
+`error` verdict, malformed output, nonzero structured-oracle exit, or timeout
+rejects a schema candidate as an oracle infrastructure error. The report does
+not claim local irreducibility when this happens. Baseline and final oracle
+infrastructure failures still abort the run. Legacy any-nonzero mode prints an additional warning
+because an application startup failure can look like a reproduction.
 
 The oracle **must connect using `DATABASE_URL` or `DBREDUCE_DATABASE_URL`**. Both point
 to the working copy and are set for every execution. Hardcoded connections and
@@ -221,7 +240,8 @@ constraint rejections, `RAISE EXCEPTION` candidate rejections, confirmation coun
 elapsed seconds, and `restore_database`. Rejection counts identify the cause class;
 raw database messages are not stored because they may contain application data. The
 `restore_database` field gives the name of the database created by the SQL dump.
-Tables are kept even when emptied, so the schema remains available to the oracle.
+Without `--reduce-schema`, tables are kept even when emptied, so the schema
+remains available to the oracle.
 
 Restore the SQL through a maintenance database using a role with `CREATEDB`:
 
@@ -305,6 +325,19 @@ an observed counterfactual. Clone mode disables the exact fingerprint cache.
 `database_clone_seconds` is zero for the snapshot backend. Aborted runs publish no
 verified result or success report. Legacy identity preservation only means the
 legacy exit-code policy held; it does not prove that the same bug survived.
+
+With `--reduce-schema`, `schema_reduction` includes initial and final counts,
+candidate outcomes, and the exact attempted transformation class. The `indexes`
+count includes indexes backing constraints. `schema_objects` counts non-data
+archive TOC entries, including defaults and other entries not broken out by kind.
+`initial_sql_bytes` and `final_sql_bytes` measure plain logical SQL exports in
+the same format; they do not compare compressed and uncompressed files. Schema
+candidate caching is disabled. `performance.phases` includes schema planning,
+introspection, reconstruction, restore, oracle execution, and final normalization.
+`minimality_by_phase` states the row and table conclusions separately; the
+existing top-level `minimality` string remains for older report consumers.
+The minimality claim means locally irreducible under attempted transformations,
+not a global minimum or reduction of every PostgreSQL object class.
 
 ## How snapshot mode works
 

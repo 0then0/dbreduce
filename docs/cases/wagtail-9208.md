@@ -1,5 +1,30 @@
 # Wagtail issue #9208
 
+## Opt-in schema validation (development v0.4)
+
+On 2026-09-28, the source was recreated using Wagtail 8.0 migrations and the
+documented 150,000-row noise generator. The real Collection oracle reproduced
+the same issue before reduction. With `--candidate-backend clone
+--reduce-schema --oracle-json --confirm 2` on PostgreSQL 17.11:
+
+| Measure                      |           Before |       After |
+| ---------------------------- | ---------------: | ----------: |
+| Rows                         |          150,706 |           3 |
+| Tables                       |               48 |           1 |
+| Indexes                      |              207 |           3 |
+| Constraints                  |              169 |           4 |
+| Sequences                    |               44 |           1 |
+| Non-data archive TOC entries |              381 |           5 |
+| Plain logical SQL            | 11,823,405 bytes | 3,714 bytes |
+
+The schema phase attempted 11 candidates, accepted 5, and rejected 6 because
+the target bug disappeared. It took 67.096 seconds of the 179.984-second run.
+The final table is `wagtailcore_collection`. DBReduce confirmed the failure
+identity after a fresh logical restore. The published SQL was then loaded with
+`psql` into a separate new PostgreSQL 17 database, and the same Wagtail oracle
+returned `wagtail-9208-collection-path-integrity`. This is locally irreducible
+under whole-table removal; individual indexes and columns were not reduced.
+
 ## Project
 
 - Project: [wagtail/wagtail](https://github.com/wagtail/wagtail)

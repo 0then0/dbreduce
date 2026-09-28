@@ -5,6 +5,13 @@ from pathlib import Path
 from psycopg.conninfo import conninfo_to_dict, make_conninfo
 
 
+class ClientError(RuntimeError):
+    def __init__(self, command: str, reason: str, returncode: int) -> None:
+        self.command = command
+        self.reason = reason
+        super().__init__(f"{command} failed (exit {returncode}; {reason})")
+
+
 def client(command: list[str], dsn: str) -> None:
     params = conninfo_to_dict(dsn)
     if params.get("sslpassword"):
@@ -32,6 +39,8 @@ def client(command: list[str], dsn: str) -> None:
     if result.returncode:
         # Raw stderr may contain credentials or application data.
         detail = result.stderr.lower()
+        if "database" in detail and "does not exist" in detail:
+            detail = "connection failed"
         reason = next(
             (
                 label
@@ -43,12 +52,21 @@ def client(command: list[str], dsn: str) -> None:
                     ("unsupported version", "archive version unsupported"),
                     ("is not available", "required extension unavailable"),
                     ("not a valid archive", "invalid archive"),
+                    ("no space left on device", "storage unavailable"),
+                    ("could not write", "storage unavailable"),
+                    ("violates foreign key constraint", "constraint violation"),
+                    ("violates check constraint", "constraint violation"),
+                    ("violates unique constraint", "constraint violation"),
+                    ("null value in column", "constraint violation"),
+                    ("does not exist", "missing dependency"),
+                    ("there is no unique constraint", "invalid schema"),
+                    ("already exists", "invalid schema"),
                 )
                 if pattern in detail
             ),
             "check PostgreSQL client and server logs",
         )
-        raise RuntimeError(f"{command[0]} failed (exit {result.returncode}; {reason})")
+        raise ClientError(command[0], reason, result.returncode)
 
 
 def dump(
@@ -77,7 +95,7 @@ def dump(
     )
 
 
-def restore(dsn: str, path: Path, *, jobs: int = 1) -> None:
+def restore(dsn: str, path: Path, *, jobs: int = 1, use_list: Path | None = None) -> None:
     with path.open("rb") as stream:
         archive = stream.read(5) == b"PGDMP"
     if not archive:
@@ -87,7 +105,9 @@ def restore(dsn: str, path: Path, *, jobs: int = 1) -> None:
     client(
         [
             "pg_restore", "--exit-on-error", "--no-owner", "--no-privileges",
-            "--jobs", str(jobs), str(path),
+            "--jobs", str(jobs),
+            *(["--use-list", str(use_list)] if use_list is not None else []),
+            str(path),
         ],
         dsn,
     )

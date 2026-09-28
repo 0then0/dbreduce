@@ -4,6 +4,17 @@ This page records the original v0.2.0 validation. Current v0.3 measurements are
 in the [benchmark](benchmark.md); application details are in the
 [Wagtail](cases/wagtail-9208.md) and [NetBox](cases/netbox-17498.md) case notes.
 
+The development v0.4 opt-in schema run on the recreated Wagtail 8.0 source
+reduced 150,706 rows and 48 tables to 3 rows and 1 table. It preserved the
+failure identity after a fresh logical restore and after a separate `psql`
+restore of the published SQL. Counts and timings are in the
+[Wagtail case](cases/wagtail-9208.md#opt-in-schema-validation-development-v04).
+The full public NetBox demo case reduced 21,381 rows and 180 tables to 2 rows
+and 4 tables. Its published SQL also passed separate restore and oracle checks.
+Seventy NetBox schema candidates produced oracle infrastructure errors, so
+its report does not claim local irreducibility. Counts and timings are in the
+[NetBox case](cases/netbox-17498.md#opt-in-schema-validation-development-v04).
+
 ## v0.2.0 results
 
 Validated commit: `a6e0f6c4c88bd9221d0cb81540b94ab617229b0b`. The runs used a
@@ -11,10 +22,10 @@ MacBook Air M1 (8 cores, 8 GB RAM, internal SSD), Python 3.14.7, PostgreSQL
 17.11, and PostgreSQL 18.6 for the Wagtail SQL restore check. PostgreSQL client
 tools ran in Docker containers.
 
-| Case | Initial → final rows | Oracle runs | Candidate probes | Elapsed | Fresh restore |
-| --- | ---: | ---: | ---: | ---: | --- |
-| Wagtail #9208 | 150,706 → 3 | 33 | 21 | 103.316–104.722s | PG17 and PG18 |
-| NetBox #17498 | 1,335 → 2 | 16 | 9 | 91.179s | PG17 |
+| Case          | Initial → final rows | Oracle runs | Candidate probes |          Elapsed | Fresh restore |
+| ------------- | -------------------: | ----------: | ---------------: | ---------------: | ------------- |
+| Wagtail #9208 |          150,706 → 3 |          33 |               21 | 103.316–104.722s | PG17 and PG18 |
+| NetBox #17498 |            1,335 → 2 |          16 |                9 |          91.179s | PG17          |
 
 Wagtail used the real Wagtail schema and documented bug. The surrounding dataset
 contained generated application noise and was not a production dump. The three
