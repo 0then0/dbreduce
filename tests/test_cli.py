@@ -103,6 +103,9 @@ def test_reduce_json_identity_report(tmp_path, monkeypatch):
     workspace.__enter__.return_value = workspace
     workspace.name = "dbreduce_test"
     workspace.url = "postgresql:///dbreduce_test"
+    workspace.databases_created = 0
+    workspace.databases_dropped = 0
+    workspace.cleanup_failures = 0
     backend = MagicMock(probes=3, accepted=1, constraint_rejections=0, raise_rejections=0)
     monkeypatch.setattr(cli, "require_clients", lambda: None)
     monkeypatch.setattr(cli.psycopg, "connect", lambda *a, **kw: connection)

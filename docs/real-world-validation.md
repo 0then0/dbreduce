@@ -1,5 +1,9 @@
 # DBReduce real-world validation report
 
+This page records the v0.2 validation. Rebuilt v0.3 Wagtail and NetBox runs,
+phase timings, and the full PostgreSQL 18 reduction are recorded in the
+[v0.3 benchmark section](benchmark.md#v03-development-evidence-unreleased).
+
 Validated DBReduce version: 0.2.0 at repository commit
 `a6e0f6c4c88bd9221d0cb81540b94ab617229b0b`.
 
@@ -24,14 +28,17 @@ Environment:
 
 ## Case summaries
 
-Wagtail #9208 checks a collection tree state that triggers a duplicate key error
+Wagtail #9208 uses the real Wagtail schema and documented bug. Its oracle checks a
+collection tree state that triggers a duplicate key error
 on `wagtailcore_collection.path` when adding a new collection. DBReduce reduced a
 150,706-row PostgreSQL database to 3 rows while preserving the structured
 signature `wagtail-9208-collection-path-integrity`. Fresh restore reproduced the
 same signature on PostgreSQL 17, and the minimized SQL also restored and
 reproduced on PostgreSQL 18.
+The large surrounding dataset was generated application noise, not a production dump.
 
-NetBox #17498 checks a bulk import lookup where duplicate manufacturer
+NetBox #17498 uses the real NetBox v4.1.1 application/form path for a bulk import
+lookup where duplicate manufacturer
 descriptions trigger `Manufacturer.MultipleObjectsReturned`. DBReduce reduced a
 1,335-row NetBox database to 2 rows while preserving
 `netbox-17498-manufacturer-description-multiple-objects`. Fresh restore
@@ -89,10 +96,10 @@ For NetBox:
 - Oracle time: 27.983s.
 - Non-oracle time: 63.196s.
 
-The measured bottleneck is snapshot work around candidates: dump, restore,
-fingerprinting, and database reset. Oracle startup is still material, especially
-because both real app oracles run inside Docker containers, but it did not
-dominate total runtime.
+These differences include all work outside the timed oracle process, including
+database reconstruction, candidate deletion, state reading, fingerprinting and
+oracle preparation. v0.2 did not time those phases separately, so these numbers
+do not identify a specific bottleneck.
 
 ## Integration pain points
 

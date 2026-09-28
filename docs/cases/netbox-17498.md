@@ -79,3 +79,4 @@ No virtual relationships were used.
 - NetBox delete signals consult Redis-backed configuration cache. The setup and
   negative control used raw SQL deletion to avoid requiring Redis. The positive
   oracle still exercises the real NetBox form path that triggers the issue.
+- This validates the application/form path, not a complete HTTP end-to-end flow.

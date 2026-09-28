@@ -42,6 +42,12 @@ For an oracle that can report a stable signature directly, use `--oracle-json` a
 have it write `{"reproduced": true, "signature": "checkout-negative-total"}` to
 stdout. See the guide for the verdict protocol and safety details.
 
+The current development tree also supports `--oracle-framed-json` for applications
+that log to stdout, `--restore-jobs N` for parallel custom-archive restores, and
+an opt-in PostgreSQL 17/18 `--candidate-backend clone`. Snapshot isolation remains
+the default. Clone mode verifies a final logical restore before publishing SQL.
+These changes are not part of the published v0.2.0 package.
+
 ## What it does
 
 - Checks failure identity so an unrelated error does not count as reproducing the bug.
@@ -58,8 +64,9 @@ overwrites existing files.
 
 ## Real-world validation
 
-DBReduce v0.2.0 was validated against real PostgreSQL databases from Wagtail and
-NetBox:
+DBReduce v0.2.0 was validated with real Wagtail and NetBox schemas and application
+oracles. Wagtail's surrounding data was generated application noise, not a production
+dump. The NetBox case exercised its form path, not a full HTTP flow:
 
 ```text
 Wagtail #9208

@@ -4,6 +4,7 @@ import re
 import shutil
 import tempfile
 import time
+from contextlib import ExitStack
 from importlib.metadata import version
 from pathlib import Path
 from typing import Annotated
@@ -14,11 +15,14 @@ import typer
 from dbreduce.cache.store import Cache
 from dbreduce.graph.dependencies import components, dependencies
 from dbreduce.oracle.runner import Oracle
-from dbreduce.postgres.backend import PostgresBackend
+from dbreduce.performance import Performance
+from dbreduce.postgres.backend import CloneBackend, PostgresBackend
+from dbreduce.postgres.clone import CloneStore, check_clone_source
 from dbreduce.postgres.database import Workspace, read_archive_settings, read_settings
 from dbreduce.postgres.dump import dump
 from dbreduce.postgres.introspection import check_extension_tables, inspect_database
 from dbreduce.postgres.relationships import load_relationships
+from dbreduce.postgres.rows import read_rows
 from dbreduce.reducer.engine import reduce as reduce_state
 
 app = typer.Typer(
@@ -119,6 +123,19 @@ def reduce_command(
     match_stderr: Annotated[str | None, typer.Option(help="Required stderr regex")] = None,
     expected_exit_code: Annotated[int | None, typer.Option()] = None,
     oracle_json: Annotated[bool, typer.Option(help="Read structured verdict from stdout")] = False,
+    oracle_framed_json: Annotated[
+        bool, typer.Option(help="Read one DBREDUCE_VERDICT JSON line amid stdout logs")
+    ] = False,
+    restore_jobs: Annotated[int, typer.Option(min=1, help="Parallel pg_restore workers")] = 1,
+    candidate_backend: Annotated[
+        str, typer.Option(help="Candidate isolation: snapshot or clone")
+    ] = "snapshot",
+    clone_strategy: Annotated[
+        str, typer.Option(help="Clone strategy: wal_log or file_copy")
+    ] = "wal_log",
+    file_copy_method: Annotated[
+        str | None, typer.Option(help="For file_copy: copy or clone (PostgreSQL 18)")
+    ] = None,
     confirm: Annotated[int, typer.Option(min=1)] = 1,
     timeout: Annotated[float, typer.Option(min=0.01)] = 60,
     output: Annotated[Path, typer.Option()] = Path("dbreduce.min.sql"),
@@ -126,6 +143,7 @@ def reduce_command(
 ) -> None:
     """Reduce a source database or dump; export SQL and a JSON report."""
     started = time.monotonic()
+    performance = Performance()
     try:
         if (database is None) == (input_dump is None) or database == "":
             raise ValueError("Provide exactly one of --database or --dump")
@@ -134,6 +152,12 @@ def reduce_command(
             raise ValueError("--admin-database is required with --dump")
         if output.resolve() == report.resolve() or output.exists() or report.exists():
             raise ValueError("Output and report must be distinct paths that do not already exist")
+        if candidate_backend not in ("snapshot", "clone"):
+            raise ValueError("--candidate-backend must be snapshot or clone")
+        if candidate_backend == "snapshot" and (
+            clone_strategy != "wal_log" or file_copy_method is not None
+        ):
+            raise ValueError("Clone options require --candidate-backend clone")
         runner = Oracle(
             oracle,
             confirm=confirm,
@@ -142,6 +166,8 @@ def reduce_command(
             match_stderr=match_stderr,
             expected_exit_code=expected_exit_code,
             structured=oracle_json,
+            framed=oracle_framed_json,
+            performance=performance,
         )
         if runner.mode == "legacy":
             typer.echo(
@@ -156,18 +182,25 @@ def reduce_command(
                 with psycopg.connect(database, connect_timeout=10) as conn:
                     conn.execute("SET TRANSACTION READ ONLY")
                     check_extension_tables(conn)
-                dump(database, snapshot)
+                    if candidate_backend == "clone":
+                        check_clone_source(conn)
+                with performance.measure("source_dump"):
+                    dump(database, snapshot)
             else:
                 assert input_dump is not None
-                shutil.copyfile(input_dump, snapshot)
+                with performance.measure("source_dump"):
+                    shutil.copyfile(input_dump, snapshot)
             settings = read_settings(database) if database else read_archive_settings(snapshot)
-            with Workspace(admin, settings=settings) as workspace:
+            with Workspace(
+                admin, settings=settings, performance=performance, restore_jobs=restore_jobs
+            ) as workspace:
                 workspace.reset(snapshot)
                 with psycopg.connect(workspace.dsn, connect_timeout=10) as conn:
                     check_extension_tables(conn)
                     schema = load_relationships(conn, inspect_database(conn), config)
                 # Keep one normalized snapshot for all probes.
-                dump(workspace.dsn, snapshot)
+                with performance.measure("initial_normalization_dump"):
+                    dump(workspace.dsn, snapshot)
                 initial_rows = sum(table.rows for table in schema.tables)
                 typer.echo(f"Initial database: {len(schema.tables)} tables, {initial_rows} rows")
                 cache = Cache()
@@ -177,16 +210,82 @@ def reduce_command(
                     )
                 typer.echo("Oracle: FAIL\nReducing tables, row groups and individual rows...")
                 workspace.reset(snapshot)
-                backend = PostgresBackend(workspace, schema, snapshot, runner, cache, typer.echo)
-                final = reduce_state(backend, typer.echo)
-                # A fresh uncached final confirmation catches some flaky-oracle failures.
-                if not runner.fails(workspace.url, lambda: workspace.reset(snapshot)):
-                    raise ValueError(
-                        "Final oracle identity confirmation failed; no verified result exported"
-                    )
-                workspace.reset(snapshot)
+                store: CloneStore | None = None
+                clone_backend: CloneBackend | None = None
+                with ExitStack() as candidate_resources:
+                    if candidate_backend == "clone":
+                        store = candidate_resources.enter_context(
+                            CloneStore(
+                                admin, settings, performance,
+                                strategy=clone_strategy,
+                                file_copy_method=file_copy_method,
+                                restore_jobs=restore_jobs,
+                            )
+                        )
+                        store.probe_file_copy_clone()
+                        accepted_db = store.create_initial(snapshot)
+                        with psycopg.connect(workspace.dsn, connect_timeout=10) as conn:
+                            with performance.measure("candidate_state_read"):
+                                initial_state, _ = read_rows(conn, schema)
+                        clone_backend = CloneBackend(
+                            store, schema, accepted_db, initial_state, runner, performance,
+                            typer.echo,
+                        )
+                        backend: CloneBackend | PostgresBackend = clone_backend
+                    else:
+                        backend = PostgresBackend(
+                            workspace, schema, snapshot, runner, cache, typer.echo, performance
+                        )
+                    final = reduce_state(backend, typer.echo)
+                    final_archive = snapshot
+                    if store is not None and clone_backend is not None:
+                        final_archive = Path(temporary) / "final-logical.dump"
+                        normalization_db = store.clone(clone_backend.accepted_db)
+                        try:
+                            with performance.measure("final_normalization_dump"):
+                                dump(store.dsn(normalization_db), final_archive)
+                        finally:
+                            store.drop(normalization_db)
+                        with performance.measure("final_normalization"):
+                            workspace.reset(final_archive)
+                        with psycopg.connect(workspace.dsn, connect_timeout=10) as conn:
+                            with performance.measure("candidate_state_read"):
+                                normalized, _ = read_rows(conn, schema)
+                        if normalized != final:
+                            raise ValueError(
+                                "Final logical restore changed candidate state; "
+                                "no verified result exported"
+                            )
+                    # A fresh uncached final confirmation catches flaky-oracle failures.
+                    if not runner.fails(
+                        workspace.url, lambda: workspace.reset(final_archive)
+                    ):
+                        raise ValueError(
+                            "Final oracle identity confirmation failed; "
+                            "no verified result exported"
+                        )
+                    with performance.measure("final_normalization"):
+                        workspace.reset(final_archive)
                 exported = Path(temporary) / "result.sql"
-                dump(workspace.dsn, exported, archive=False, create_database=True)
+                with performance.measure("final_export"):
+                    dump(workspace.dsn, exported, archive=False, create_database=True)
+                with psycopg.connect(admin, connect_timeout=10) as conn:
+                    version_row = conn.execute("SHOW server_version").fetchone()
+                    assert version_row is not None
+                    server_version = str(version_row[0])
+                backend_info = {
+                    "type": candidate_backend,
+                    "strategy": clone_strategy if store is not None else None,
+                    "server_version": server_version,
+                    "file_copy_method": (
+                        file_copy_method or store.server_file_copy_method
+                        if store is not None and clone_strategy == "file_copy"
+                        else None
+                    ),
+                    "file_copy_clone_probe": store.clone_probe if store is not None else None,
+                    "filesystem_reflink_verified": False,
+                    "restore_jobs": restore_jobs,
+                }
                 final_rows = sum(map(len, final.values()))
                 result = {
                     "dbreduce_version": version("dbreduce"),
@@ -196,11 +295,26 @@ def reduce_command(
                         "confirmations": confirm,
                         "outcomes": dict(runner.outcomes),
                     },
-                    "candidate_backend": {"type": "snapshot"},
+                    "candidate_backend": backend_info,
                     "candidate_stats": {
                         "created": backend.probes,
                         "accepted": backend.accepted,
                         "rejected": backend.probes - backend.accepted,
+                    },
+                    "cache_stats": {
+                        "policy": "exact_fingerprint" if store is None else "disabled",
+                        "lookups": cache.lookups,
+                        "hits": cache.hits,
+                        "hit_rate": cache.hits / cache.lookups if cache.lookups else 0,
+                        "estimated_seconds_saved": (
+                            (cache.accepted_hits * confirm + cache.rejected_hits)
+                            * (
+                                performance.phases["oracle_state_preparation"][1]
+                                + performance.phases["oracle_process"][1]
+                            )
+                            / runner.executions
+                            if runner.executions else 0
+                        ),
                     },
                     "relationships": {
                         "database_fk_count": sum(not fk.virtual for fk in schema.foreign_keys),
@@ -220,7 +334,10 @@ def reduce_command(
                     "performance": {
                         "elapsed_seconds": time.monotonic() - started,
                         "oracle_seconds": runner.seconds,
-                        "database_clone_seconds": 0,
+                        "database_clone_seconds": (
+                            performance.phases["database_clone"][1] if store is not None else 0
+                        ),
+                        "phases": performance.report(),
                     },
                     "minimality": "locally irreducible under attempted transformations",
                     "transformations": ["tables", "chunks", "single rows", "relationship closure"],
@@ -245,6 +362,28 @@ def reduce_command(
                     "oracle": "FAIL",
                     "restore_database": workspace.name,
                 }
+                result["database_stats"] = {
+                    "clone_attempts": store.clone_attempts if store is not None else 0,
+                    "clone_failures": store.clone_failures if store is not None else 0,
+                    "fallbacks": 0,
+                    "created": workspace.databases_created + (store.created if store else 0),
+                    "dropped": workspace.databases_dropped + (store.dropped if store else 0),
+                    "cleanup_failures": workspace.cleanup_failures
+                    + (store.cleanup_failures if store else 0),
+                }
+            database_stats = result["database_stats"]
+            assert isinstance(database_stats, dict)
+            database_stats["dropped"] = workspace.databases_dropped + (
+                store.dropped if store is not None else 0
+            )
+            database_stats["cleanup_failures"] = workspace.cleanup_failures + (
+                store.cleanup_failures if store is not None else 0
+            )
+            performance_result = result["performance"]
+            assert isinstance(performance_result, dict)
+            performance_result["phases"] = performance.report()
+            performance_result["elapsed_seconds"] = time.monotonic() - started
+            result["duration_seconds"] = performance_result["elapsed_seconds"]
             publish_result(exported, output, report, result)
             typer.echo(
                 f"Final: {final_rows} rows, oracle: FAIL, "

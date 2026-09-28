@@ -10,6 +10,10 @@ import time
 from collections import Counter
 from collections.abc import Callable
 
+from dbreduce.performance import Performance
+
+VERDICT_PREFIX = "DBREDUCE_VERDICT "
+
 
 class OracleError(RuntimeError):
     pass
@@ -59,25 +63,32 @@ class Oracle:
         match_stderr: str | None = None,
         expected_exit_code: int | None = None,
         structured: bool = False,
+        framed: bool = False,
+        performance: Performance | None = None,
     ) -> None:
         if confirm < 1 or timeout <= 0:
             raise ValueError("confirm and timeout must be positive")
-        if structured and any(
+        if structured and framed:
+            raise ValueError("Choose either --oracle-json or --oracle-framed-json")
+        if (structured or framed) and any(
             x is not None for x in (match_stdout, match_stderr, expected_exit_code)
         ):
-            raise ValueError("--oracle-json cannot be combined with exit/output matchers")
+            raise ValueError("Structured oracle cannot be combined with exit/output matchers")
         if expected_exit_code is not None and not 1 <= expected_exit_code < 126:
             raise ValueError("Expected exit code must be between 1 and 125")
         self.stdout_pattern = re.compile(match_stdout) if match_stdout is not None else None
         self.stderr_pattern = re.compile(match_stderr) if match_stderr is not None else None
         self.mode = (
-            "json"
+            "framed_json"
+            if framed
+            else "json"
             if structured
             else "matcher"
             if any(x is not None for x in (match_stdout, match_stderr, expected_exit_code))
             else "legacy"
         )
         self.command = command
+        self.performance = performance or Performance()
         self.confirm = confirm
         self.timeout = timeout
         self.expected_exit_code = expected_exit_code
@@ -93,9 +104,15 @@ class Oracle:
     ) -> tuple[str, str | None]:
         if code < 0 or code >= 126:
             raise OracleError("Oracle infrastructure error: launch failure or signal status")
-        if self.mode == "json":
+        if self.mode in ("json", "framed_json"):
             if code != 0:
                 raise OracleError("Structured oracle must exit zero with a verdict")
+            if self.mode == "framed_json":
+                lines = [line[len(VERDICT_PREFIX):] for line in stdout.splitlines()
+                         if line.startswith(VERDICT_PREFIX)]
+                if len(lines) != 1:
+                    raise OracleError("Framed oracle requires exactly one verdict line")
+                stdout = lines[0]
             try:
                 verdict = json.loads(stdout)
             except ValueError as error:
@@ -148,7 +165,7 @@ class Oracle:
         return "same_failure", identity
 
     def _run(self, env: dict[str, str]) -> tuple[int, str, str]:
-        capture_out = self.mode == "json" or self.stdout_pattern is not None
+        capture_out = self.mode in ("json", "framed_json") or self.stdout_pattern is not None
         capture_err = self.stderr_pattern is not None
         buffers = [bytearray(), bytearray()]
         status_read, status_write = os.pipe()
@@ -222,33 +239,47 @@ class Oracle:
             buffers[1].decode("utf-8", errors="replace"),
         )
 
-    def fails(self, url: str, prepare: Callable[[], None]) -> bool:
-        env = os.environ.copy()
-        env.update(DATABASE_URL=url, DBREDUCE_DATABASE_URL=url)
+    def fails(
+        self,
+        url: str,
+        prepare: Callable[[], str | None],
+        cleanup: Callable[[], None] | None = None,
+    ) -> bool:
         for _ in range(self.confirm):
-            prepare()
-            self.executions += 1
-            started = time.monotonic()
             try:
-                code, out, err = self._run(env)
-                outcome, identity = self._classify(
-                    code,
-                    out,
-                    err,
-                    matcher_timeout=self.timeout - (time.monotonic() - started),
-                )
-            except subprocess.TimeoutExpired as error:
-                self.last_outcome = "timeout"
-                self.outcomes[self.last_outcome] += 1
-                raise OracleError("Oracle timed out; this is not a reproduced failure") from error
-            except (OSError, OracleError) as error:
-                self.last_outcome = "infrastructure_error"
-                self.outcomes[self.last_outcome] += 1
-                raise OracleError(
-                    str(error) if isinstance(error, OracleError) else "Could not launch oracle"
-                ) from error
+                with self.performance.measure("oracle_state_preparation"):
+                    prepared_url = prepare()
+                current_url = prepared_url if prepared_url is not None else url
+                env = os.environ.copy()
+                env.update(DATABASE_URL=current_url, DBREDUCE_DATABASE_URL=current_url)
+                self.executions += 1
+                started = time.monotonic()
+                try:
+                    with self.performance.measure("oracle_process"):
+                        code, out, err = self._run(env)
+                    outcome, identity = self._classify(
+                        code,
+                        out,
+                        err,
+                        matcher_timeout=self.timeout - (time.monotonic() - started),
+                    )
+                except subprocess.TimeoutExpired as error:
+                    self.last_outcome = "timeout"
+                    self.outcomes[self.last_outcome] += 1
+                    raise OracleError(
+                        "Oracle timed out; this is not a reproduced failure"
+                    ) from error
+                except (OSError, OracleError) as error:
+                    self.last_outcome = "infrastructure_error"
+                    self.outcomes[self.last_outcome] += 1
+                    raise OracleError(
+                        str(error) if isinstance(error, OracleError) else "Could not launch oracle"
+                    ) from error
+                finally:
+                    self.seconds += time.monotonic() - started
             finally:
-                self.seconds += time.monotonic() - started
+                if cleanup is not None:
+                    cleanup()
             self.last_outcome = outcome
             self.outcomes[outcome] += 1
             self.final_signature = identity

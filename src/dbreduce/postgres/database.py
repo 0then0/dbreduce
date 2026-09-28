@@ -12,6 +12,7 @@ import psycopg
 from psycopg import sql
 from psycopg.conninfo import conninfo_to_dict, make_conninfo
 
+from dbreduce.performance import Performance
 from dbreduce.postgres.dump import restore
 
 
@@ -135,10 +136,43 @@ def database_url(dsn: str, name: str) -> str:
     return f"postgresql://{authority}/{quote(name, safe='')}{query}"
 
 
+def initial_database_statement(name: str, settings: DatabaseSettings | None) -> sql.Composed:
+    statement = sql.SQL("CREATE DATABASE {} TEMPLATE template0").format(sql.Identifier(name))
+    if settings is not None:
+        statement += sql.SQL(" ENCODING {} LC_COLLATE {} LC_CTYPE {}").format(
+            sql.Literal(settings.encoding),
+            sql.Literal(settings.lc_collate),
+            sql.Literal(settings.lc_ctype),
+        )
+        if settings.provider == "i":
+            if settings.locale is None:
+                raise ValueError("Source ICU locale is missing")
+            statement += sql.SQL(" LOCALE_PROVIDER icu ICU_LOCALE {}").format(
+                sql.Literal(settings.locale)
+            )
+            if settings.icu_rules:
+                statement += sql.SQL(" ICU_RULES {}").format(sql.Literal(settings.icu_rules))
+        elif settings.provider == "b":
+            if settings.locale is None:
+                raise ValueError("Source builtin locale is missing")
+            statement += sql.SQL(" LOCALE_PROVIDER builtin BUILTIN_LOCALE {}").format(
+                sql.Literal(settings.locale)
+            )
+        elif settings.provider != "c":
+            raise ValueError(f"Unsupported locale provider: {settings.provider}")
+    return statement
+
+
 class Workspace:
     """Own exactly one random database; no destructive method accepts a user database name."""
 
-    def __init__(self, admin_dsn: str, settings: DatabaseSettings | None = None) -> None:
+    def __init__(
+        self,
+        admin_dsn: str,
+        settings: DatabaseSettings | None = None,
+        performance: Performance | None = None,
+        restore_jobs: int = 1,
+    ) -> None:
         self.admin_dsn = admin_dsn
         self.name = f"dbreduce_{uuid.uuid4().hex}"
         self.lock_key = int.from_bytes(
@@ -148,6 +182,11 @@ class Workspace:
         self.url = database_url(admin_dsn, self.name)
         self.settings = settings
         self.created = False
+        self.databases_created = 0
+        self.databases_dropped = 0
+        self.cleanup_failures = 0
+        self.performance = performance or Performance()
+        self.restore_jobs = restore_jobs
 
     def __enter__(self) -> "Workspace":
         return self
@@ -158,38 +197,13 @@ class Workspace:
             conn.execute("SET statement_timeout = '600s'")
             # Keep cleanup behind a CREATE that continues after its client loses the reply.
             conn.execute("SELECT pg_advisory_lock(%s)", (self.lock_key,))
-            statement = sql.SQL("CREATE DATABASE {} TEMPLATE template0").format(
-                sql.Identifier(self.name)
-            )
-            if self.settings is not None:
-                settings = self.settings
-                statement += sql.SQL(" ENCODING {} LC_COLLATE {} LC_CTYPE {}").format(
-                    sql.Literal(settings.encoding),
-                    sql.Literal(settings.lc_collate),
-                    sql.Literal(settings.lc_ctype),
-                )
-                if settings.provider == "i":
-                    if settings.locale is None:
-                        raise ValueError("Source ICU locale is missing")
-                    statement += sql.SQL(" LOCALE_PROVIDER icu ICU_LOCALE {}").format(
-                        sql.Literal(settings.locale)
-                    )
-                    if settings.icu_rules:
-                        statement += sql.SQL(" ICU_RULES {}").format(
-                            sql.Literal(settings.icu_rules)
-                        )
-                elif settings.provider == "b":
-                    if settings.locale is None:
-                        raise ValueError("Source builtin locale is missing")
-                    statement += sql.SQL(" LOCALE_PROVIDER builtin BUILTIN_LOCALE {}").format(
-                        sql.Literal(settings.locale)
-                    )
-                elif settings.provider != "c":
-                    raise ValueError(f"Unsupported locale provider: {settings.provider}")
+            statement = initial_database_statement(self.name, self.settings)
             # CREATE may commit even if its reply is lost; cleanup must still try the name.
             self.created = True
             try:
-                conn.execute(statement)
+                with self.performance.measure("database_create"):
+                    conn.execute(statement)
+                self.databases_created += 1
             except psycopg.errors.DuplicateDatabase:
                 # This name existed before our CREATE; it is not ours to drop.
                 self.created = False
@@ -197,7 +211,8 @@ class Workspace:
 
     def reset(self, snapshot: Path) -> None:
         self.create()
-        restore(self.dsn, snapshot)
+        with self.performance.measure("restore"):
+            restore(self.dsn, snapshot, jobs=self.restore_jobs)
 
     def close(self) -> None:
         if self.created:
@@ -205,17 +220,20 @@ class Workspace:
                 with psycopg.connect(self.admin_dsn, autocommit=True, connect_timeout=10) as conn:
                     conn.execute("SET statement_timeout = '600s'")
                     conn.execute("SELECT pg_advisory_lock(%s)", (self.lock_key,))
-                    conn.execute(
-                        sql.SQL("DROP DATABASE IF EXISTS {} WITH (FORCE)").format(
-                            sql.Identifier(self.name)
+                    with self.performance.measure("database_cleanup"):
+                        conn.execute(
+                            sql.SQL("DROP DATABASE IF EXISTS {} WITH (FORCE)").format(
+                                sql.Identifier(self.name)
+                            )
                         )
-                    )
             except psycopg.Error as error:
+                self.cleanup_failures += 1
                 raise RuntimeError(
                     f"Could not confirm cleanup of workspace database {self.name}; "
                     "inspect and remove it if present"
                 ) from error
             self.created = False
+            self.databases_dropped += 1
 
     def __exit__(
         self,

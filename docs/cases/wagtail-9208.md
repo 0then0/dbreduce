@@ -36,7 +36,8 @@ The source database used PostgreSQL 17 and Wagtail's real migrations. It had
 
 This was intentionally not a minimal fixture. The bug itself needs three
 `wagtailcore_collection` rows, while the surrounding database was a larger
-application schema with real foreign keys.
+application schema with real foreign keys. The surrounding rows were generated
+application noise; this was not a production database dump.
 
 ## DBReduce command
 

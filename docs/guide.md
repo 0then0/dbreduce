@@ -62,7 +62,102 @@ fields, and nonzero process status in JSON mode abort reduction. Signature must 
 a nonempty string of at most 256 characters. Extra fields are ignored. JSON mode
 cannot be combined with exit/output matchers.
 
-`--confirm N` requires N/N matching verdicts, each starting from a fresh restore.
+For applications that log to stdout, use `--oracle-framed-json`. The command must
+exit zero and emit exactly one line beginning `DBREDUCE_VERDICT `, followed by the
+same JSON verdict. Other stdout lines are ignored and never saved. Zero or multiple
+framed lines, malformed JSON and nonzero exit status are infrastructure errors.
+The 1 MiB captured-output limit still applies. Strict `--oracle-json` is unchanged.
+
+Python script:
+
+```python
+import json
+from app.checkout import NegativeTotalError, checkout
+
+try:
+    checkout()
+except NegativeTotalError:
+    verdict = {"reproduced": True, "signature": "checkout-negative-total"}
+else:
+    verdict = {"reproduced": False}
+print("DBREDUCE_VERDICT " + json.dumps(verdict))
+```
+
+Pytest wrapper, where the selected test raises a specific exception for the bug:
+
+```python
+import json
+import pytest
+from app.checkout import NegativeTotalError
+
+class Identity:
+    signature = None
+    setup_error = False
+
+    @pytest.hookimpl(hookwrapper=True)
+    def pytest_runtest_makereport(self, item, call):
+        outcome = yield
+        if call.excinfo:
+            if outcome.get_result().when == "call":
+                self.signature = (
+                    "checkout-negative-total"
+                    if call.excinfo.type is NegativeTotalError
+                    else "other-test-failure"
+                )
+            else:
+                self.setup_error = True
+
+identity = Identity()
+status = pytest.main(["-q", "tests/test_checkout.py::test_bug"], plugins=[identity])
+verdict = (
+    {"reproduced": False, "error": "pytest setup failed"}
+    if identity.setup_error or status not in (0, 1)
+    else {"reproduced": True, "signature": identity.signature}
+    if identity.signature
+    else {"reproduced": False}
+)
+print("DBREDUCE_VERDICT " + json.dumps(verdict))
+```
+
+Django application oracle, after normal startup logging:
+
+```python
+import json
+import os
+
+os.environ.setdefault("DJANGO_SETTINGS_MODULE", "project.settings")
+import django
+
+django.setup()
+from django.db import IntegrityError
+from wagtail.models import Collection
+
+try:
+    Collection.objects.get(name="Root").add_child(name="Mammals")
+except IntegrityError as error:
+    target = "wagtailcore_collection" in str(error) and "path" in str(error)
+    verdict = {
+        "reproduced": True,
+        "signature": "collection-path-integrity" if target else "other-integrity-error",
+    }
+else:
+    verdict = {"reproduced": False}
+print("DBREDUCE_VERDICT " + json.dumps(verdict))
+```
+
+Dockerized application with a database host reachable from the container:
+
+```bash
+dbreduce reduce --database "$SOURCE_DATABASE_URL" \
+  --oracle 'docker exec -e DATABASE_URL="$DATABASE_URL" app-container python /app/oracle.py' \
+  --oracle-framed-json --confirm 3
+```
+
+If the host DSN uses `localhost`, translate that host to a container-reachable
+address in the wrapper. No verdict file needs to be shared with the container.
+
+`--confirm N` requires N/N matching verdicts, each starting from a fresh snapshot
+restore or separate clone of the pristine candidate.
 The first mismatch rejects the candidate immediately. The initial and final
 confirmation also require N/N; a mismatch there aborts export. This does not prove
 stability of a flaky oracle. Cached outcomes assume determinism within one run.
@@ -75,7 +170,7 @@ that hides a signal behind another exit code cannot be detected reliably.
 matcher evaluation. Remaining oracle process-group children are killed after each
 execution, including timeout and Ctrl-C.
 
-Without a matcher or JSON mode, legacy mode warns and accepts any nonzero exit
+Without a matcher or structured mode, legacy mode warns and accepts any nonzero exit
 below 126. DB connection failures and other application setup errors cannot be
 reliably distinguished from bugs from an exit code alone. A regex can have the same
 limitation if an application prints a matching message before failing elsewhere.
@@ -85,7 +180,7 @@ Only streams needed for identity matching are captured, through pipes with an en
 1 MiB limit per stream. Overflow aborts and kills the oracle process group. Unused
 streams are discarded. No output is written to temporary files.
 No stdout/stderr or raw signature is saved in the report.
-JSON signatures are reported as SHA-256 digests. Matcher mode reports `exit:N`;
+Structured signatures are reported as SHA-256 digests. Matcher mode reports `exit:N`;
 legacy mode reports `any-nonzero`. Configured regexes are included for
 reproducibility: do not embed secrets in them.
 
@@ -108,6 +203,15 @@ are rejected because `pg_restore` refuses to read their database settings.
 
 Plain SQL is an output format, not an accepted input format. This avoids executing
 `psql` reconnect/shell meta-commands while restoring user input.
+
+Candidate isolation defaults to `--candidate-backend snapshot`. PostgreSQL 17/18
+can explicitly use `--candidate-backend clone`; see [isolation](isolation.md) for
+its ownership checks, replication preflight and final logical normalization.
+`--restore-jobs 4` enables parallel custom-archive restores when the environment
+benefits; the default remains 1. Clone strategies are `wal_log` (default) and
+`file_copy`. PostgreSQL 18 also accepts `--clone-strategy file_copy
+--file-copy-method clone` if its capability probe passes. The report distinguishes
+configured CLONE from verified filesystem block sharing.
 
 Outputs default to `dbreduce.min.sql` and `dbreduce-report.json`. Existing files are
 never overwritten. Override with `--output` and `--report`. Both files are prepared
@@ -191,12 +295,18 @@ and `transformations`. `oracle_stats.outcomes` counts actual executions by outco
 `confirmations` is the configured N, not an additional execution count.
 `candidate_stats.created` counts attempted deletion probes, including constraint
 rejections and cache hits. Accepted/rejected counts partition those completed probes.
-`performance.oracle_seconds` excludes restoration; elapsed time includes all work.
+`performance.oracle_seconds` excludes preparation and restoration; elapsed time
+includes all work. `performance.phases` gives count, total and average for each
+operation. Some phases are nested, such as `restore` within oracle state preparation,
+so their totals must not be added together. `database_stats` records exact created,
+dropped, clone attempts/failures and cleanup failures. `cache_stats` records hit rate
+and an estimated time saved from observed oracle cycle cost; it is an estimate, not
+an observed counterfactual. Clone mode disables the exact fingerprint cache.
 `database_clone_seconds` is zero for the snapshot backend. Aborted runs publish no
 verified result or success report. Legacy identity preservation only means the
 legacy exit-code policy held; it does not prove that the same bug survived.
 
-## How it works
+## How snapshot mode works
 
 1. Dump the source consistently and restore it into a random `dbreduce_<uuid>` database.
 2. Discover tables, primary keys, validated foreign keys, row counts and dependencies.
@@ -216,8 +326,9 @@ legacy exit-code policy held; it does not prove that the same bug survived.
 8. Reconfirm the final state without the cache, restore the pristine snapshot, export,
    and drop the working database.
 
-Full restore per probe remains conservative and expensive. v0.2 favors
-correctness over speed; see [clone backend investigation](isolation.md). It is unsuitable for very large databases: row identities,
+Full restore per probe remains conservative and expensive. See the
+[clone backend lifecycle](isolation.md) for the opt-in alternative. DBReduce is
+unsuitable for very large databases: row identities,
 FK closure and candidate dumps require memory/disk proportional to the dataset.
 
 ## Boundaries and limitations
@@ -244,11 +355,12 @@ FK closure and candidate dumps require memory/disk proportional to the dataset.
 - PostgreSQL client operations have a 600-second timeout; connections default to a
   10-second timeout. Oracle executions use `--timeout` independently.
 - Do not allow other clients to write into the workspace. Do not use production as
-  a workspace. Only generated database names are ever passed to DROP DATABASE.
-- Ordinary failures and Ctrl-C attempt to clean up the workspace, including an
-  uncertain CREATE DATABASE result. A killed process or server outage can still
-  leave a `dbreduce_<uuid>` database for manual cleanup. If cleanup cannot be
-  confirmed, the error reports the exact database name to inspect after recovery.
+  a workspace. Clone cleanup verifies exact name, OID, owner and run marker before
+  dropping each owned database.
+- Ordinary failures and Ctrl-C attempt to clean up owned databases. An uncertain
+  clone CREATE reply, killed process or server outage can leave a generated database.
+  DBReduce reports exact names when it cannot confirm ownership or cleanup; inspect
+  them manually. It does not force-disconnect other sessions from clone databases.
 - Dumps/reports contain application data. Store them appropriately; no DSN is saved
   in the report. PostgreSQL errors are intentionally summarized without credentials.
 

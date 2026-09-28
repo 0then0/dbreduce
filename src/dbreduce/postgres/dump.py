@@ -77,9 +77,17 @@ def dump(
     )
 
 
-def restore(dsn: str, path: Path) -> None:
+def restore(dsn: str, path: Path, *, jobs: int = 1) -> None:
     with path.open("rb") as stream:
         archive = stream.read(5) == b"PGDMP"
     if not archive:
         raise ValueError("Input must be a pg_dump custom-format archive (--format=custom)")
-    client(["pg_restore", "--exit-on-error", "--no-owner", "--no-privileges", str(path)], dsn)
+    if jobs < 1:
+        raise ValueError("restore jobs must be positive")
+    client(
+        [
+            "pg_restore", "--exit-on-error", "--no-owner", "--no-privileges",
+            "--jobs", str(jobs), str(path),
+        ],
+        dsn,
+    )
