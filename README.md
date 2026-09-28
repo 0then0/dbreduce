@@ -66,7 +66,10 @@ overwrites existing files.
 
 DBReduce v0.2.0 was validated with real Wagtail and NetBox schemas and application
 oracles. Wagtail's surrounding data was generated application noise, not a production
-dump. The NetBox case exercised its form path, not a full HTTP flow:
+dump. The 1,335-row NetBox database was reconstructed; the issue author's exact
+database dump is unavailable. In the v0.3 development validation, the official
+NetBox 4.1 demo dump was used as a public alternative and reduced with a fresh
+restore check. NetBox validation exercised its form path, not a full HTTP flow:
 
 ```text
 Wagtail #9208

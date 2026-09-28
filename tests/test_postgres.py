@@ -331,12 +331,13 @@ def test_archive_with_newline_database_name_is_rejected_without_writes(tmp_path)
             )
 
 
-def test_lost_create_reply_cleans_real_database():
+def test_lost_create_reply_leaves_unverified_database_for_inspection():
     admin = os.environ.get("DBREDUCE_TEST_ADMIN")
     if not admin:
         pytest.skip("Set DBREDUCE_TEST_ADMIN")
     real_connect = psycopg.connect
     created_on_server = False
+    created_identity = None
 
     class LostReplyConnection:
         def __init__(self, connection):
@@ -366,27 +367,66 @@ def test_lost_create_reply_cleans_real_database():
         with patch(
             "dbreduce.postgres.database.psycopg.connect", side_effect=connect_with_lost_reply
         ):
-            with pytest.raises(psycopg.OperationalError, match="server reply lost"):
+            with pytest.raises(RuntimeError, match="unverified"):
                 with workspace:
                     workspace.create()
         assert created_on_server
         assert not workspace.created
         with real_connect(admin) as conn:
-            assert not conn.execute(
-                "SELECT EXISTS (SELECT 1 FROM pg_database WHERE datname = %s)",
+            created_identity = conn.execute(
+                "SELECT oid, datdba FROM pg_database WHERE datname = %s",
                 (workspace.name,),
-            ).fetchone()[0]
+            ).fetchone()
+            assert created_identity is not None
     finally:
         if created_on_server:
             with real_connect(admin, autocommit=True) as conn:
-                conn.execute(
-                    sql.SQL("DROP DATABASE IF EXISTS {} WITH (FORCE)").format(
-                        sql.Identifier(workspace.name)
-                    )
+                current = conn.execute(
+                    "SELECT oid, datdba FROM pg_database WHERE datname = %s",
+                    (workspace.name,),
+                ).fetchone()
+                if current is not None and created_identity == current:
+                    conn.execute(sql.SQL("DROP DATABASE {}").format(sql.Identifier(workspace.name)))
+
+
+def test_workspace_does_not_drop_same_name_replacement():
+    admin = os.environ.get("DBREDUCE_TEST_ADMIN")
+    if not admin:
+        pytest.skip("Set DBREDUCE_TEST_ADMIN")
+    workspace = Workspace(admin)
+    real_connect = psycopg.connect
+    replacement_oid = None
+    try:
+        workspace.create()
+        owned_oid = workspace.oid
+        with real_connect(admin, autocommit=True) as conn:
+            conn.execute(sql.SQL("DROP DATABASE {}").format(sql.Identifier(workspace.name)))
+            conn.execute(
+                sql.SQL("CREATE DATABASE {} TEMPLATE template0").format(
+                    sql.Identifier(workspace.name)
                 )
+            )
+            replacement_oid = conn.execute(
+                "SELECT oid FROM pg_database WHERE datname = %s", (workspace.name,)
+            ).fetchone()[0]
+        assert replacement_oid != owned_oid
+        with pytest.raises(RuntimeError, match="Ownership.*cannot be verified"):
+            workspace.close()
+        with real_connect(admin) as conn:
+            assert conn.execute(
+                "SELECT oid FROM pg_database WHERE datname = %s", (workspace.name,)
+            ).fetchone()[0] == replacement_oid
+    finally:
+        if replacement_oid is not None:
+            with real_connect(admin, autocommit=True) as conn:
+                current = conn.execute(
+                    "SELECT oid FROM pg_database WHERE datname = %s", (workspace.name,)
+                ).fetchone()
+                if current is not None and current[0] == replacement_oid:
+                    conn.execute(sql.SQL("DROP DATABASE {}").format(sql.Identifier(workspace.name)))
 
 
-def test_disconnect_while_create_is_waiting_does_not_leave_database():
+def test_disconnect_while_create_is_waiting_reports_unverified_database():
     admin = os.environ.get("DBREDUCE_TEST_ADMIN")
     if not admin:
         pytest.skip("Set DBREDUCE_TEST_ADMIN")
@@ -401,6 +441,7 @@ def test_disconnect_while_create_is_waiting_does_not_leave_database():
     cleanup_connecting = threading.Event()
     thread = None
     name_was_absent = False
+    observed_identity = None
 
     class CreatorConnection:
         def __enter__(self):
@@ -463,13 +504,14 @@ def test_disconnect_while_create_is_waiting_does_not_leave_database():
             blocker.execute("ROLLBACK")
             thread.join(timeout=30)
         assert not thread.is_alive()
-        assert errors and isinstance(errors[0], psycopg.OperationalError)
+        assert errors and isinstance(errors[0], RuntimeError)
+        assert workspace.name in str(errors[0])
         assert not workspace.created
         with real_connect(admin) as observer:
-            assert not observer.execute(
-                "SELECT EXISTS (SELECT 1 FROM pg_database WHERE datname = %s)",
+            observed_identity = observer.execute(
+                "SELECT oid, datdba FROM pg_database WHERE datname = %s",
                 (workspace.name,),
-            ).fetchone()[0]
+            ).fetchone()
     finally:
         try:
             blocker.execute("ROLLBACK")
@@ -496,11 +538,14 @@ def test_disconnect_while_create_is_waiting_does_not_leave_database():
                     while cleanup.execute(active_create, (creator_pid, create_query)).fetchone()[0]:
                         assert time.monotonic() < deadline, "CREATE backend did not terminate"
                         time.sleep(0.05)
-                    cleanup.execute(
-                        sql.SQL("DROP DATABASE IF EXISTS {} WITH (FORCE)").format(
-                            sql.Identifier(workspace.name)
+                    current = cleanup.execute(
+                        "SELECT oid, datdba FROM pg_database WHERE datname = %s",
+                        (workspace.name,),
+                    ).fetchone()
+                    if observed_identity is not None and current == observed_identity:
+                        cleanup.execute(
+                            sql.SQL("DROP DATABASE {}").format(sql.Identifier(workspace.name))
                         )
-                    )
             finally:
                 creator.close()
         else:
@@ -823,8 +868,15 @@ def test_clone_rejects_different_failure_and_isolates_oracle_writes(workspace, t
     admin = os.environ["DBREDUCE_TEST_ADMIN"]
     final_dump = tmp_path / "final.dump"
     with CloneStore(admin, read_settings(workspace.dsn), Performance()) as store:
-        accepted = store.create_initial(snapshot)
-        backend = CloneBackend(store, schema, accepted, initial, oracle, Performance())
+        accepted, accepted_state = store.create_initial(snapshot, schema)
+        backend = CloneBackend(store, schema, accepted, accepted_state, oracle, Performance())
+        assert backend.confirm_initial_state()
+        accepted_copy = store.clone(accepted)
+        try:
+            with psycopg.connect(store.dsn(accepted_copy)) as conn:
+                assert conn.execute("SELECT count(*) FROM parent").fetchone()[0] == 20
+        finally:
+            store.drop(accepted_copy)
         final = reduce(backend, lambda _: None)
         assert {key: len(rows) for key, rows in final.items()} == {
             ("public", "parent"): 1,
@@ -848,12 +900,34 @@ def test_clone_rejects_different_failure_and_isolates_oracle_writes(workspace, t
         assert conn.execute("SELECT id FROM parent").fetchall() == [(7,)]
 
 
+def test_clone_initial_state_is_read_from_restored_accepted_database(workspace, tmp_path):
+    snapshot = tmp_path / "accepted.dump"
+    dump(workspace.dsn, snapshot)
+    with psycopg.connect(workspace.dsn) as conn:
+        schema = inspect_database(conn)
+        conn.execute("INSERT INTO parent VALUES (999)")
+    with CloneStore(
+        os.environ["DBREDUCE_TEST_ADMIN"], read_settings(workspace.dsn), Performance()
+    ) as store:
+        accepted, initial_state = store.create_initial(snapshot, schema)
+        assert len(initial_state[("public", "parent")]) == 20
+        copy = store.clone(accepted)
+        try:
+            with psycopg.connect(store.dsn(copy)) as conn:
+                actual_state, _ = read_rows(conn, schema)
+            assert initial_state == actual_state
+        finally:
+            store.drop(copy)
+
+
 def test_clone_ownership_marker_blocks_unverified_cleanup(workspace, tmp_path):
     snapshot = tmp_path / "source.dump"
     dump(workspace.dsn, snapshot)
+    with psycopg.connect(workspace.dsn) as conn:
+        schema = inspect_database(conn)
     admin = os.environ["DBREDUCE_TEST_ADMIN"]
     with CloneStore(admin, read_settings(workspace.dsn), Performance()) as store:
-        accepted = store.create_initial(snapshot)
+        accepted, _ = store.create_initial(snapshot, schema)
         candidate = store.clone(accepted)
         with psycopg.connect(admin, autocommit=True) as conn:
             conn.execute(
@@ -877,12 +951,26 @@ def test_clone_ownership_marker_blocks_unverified_cleanup(workspace, tmp_path):
         store.drop(candidate)
 
 
+def test_clone_rejected_create_error_is_not_reported_as_ambiguous(workspace):
+    admin = os.environ["DBREDUCE_TEST_ADMIN"]
+    with CloneStore(admin, read_settings(workspace.dsn), Performance()) as store:
+        with pytest.raises(psycopg.errors.InvalidCatalogName):
+            store._create(
+                lambda name: sql.SQL("CREATE DATABASE {} TEMPLATE {}").format(
+                    sql.Identifier(name), sql.Identifier("dbreduce_missing_template")
+                )
+            )
+        assert store.unproven == set()
+
+
 def test_clone_freeze_rejects_unexpected_session_without_termination(workspace, tmp_path):
     snapshot = tmp_path / "source.dump"
     dump(workspace.dsn, snapshot)
+    with psycopg.connect(workspace.dsn) as conn:
+        schema = inspect_database(conn)
     admin = os.environ["DBREDUCE_TEST_ADMIN"]
     with CloneStore(admin, read_settings(workspace.dsn), Performance()) as store:
-        accepted = store.create_initial(snapshot)
+        accepted, _ = store.create_initial(snapshot, schema)
         candidate = store.clone(accepted)
         with psycopg.connect(store.dsn(candidate)) as unexpected:
             with pytest.raises(RuntimeError, match="unexpected sessions"):
@@ -913,6 +1001,8 @@ def test_clone_promotion_keeps_exact_trigger_result(workspace, tmp_path):
         initial, _ = read_rows(conn, schema)
     snapshot = tmp_path / "source.dump"
     dump(workspace.dsn, snapshot)
+    with psycopg.connect(workspace.dsn) as conn:
+        schema = inspect_database(conn)
     code = (
         "import os,json,psycopg; "
         "c=psycopg.connect(os.environ['DATABASE_URL']); "
@@ -923,8 +1013,8 @@ def test_clone_promotion_keeps_exact_trigger_result(workspace, tmp_path):
     assert oracle.fails(workspace.url, lambda: workspace.reset(snapshot))
     admin = os.environ["DBREDUCE_TEST_ADMIN"]
     with CloneStore(admin, read_settings(workspace.dsn), Performance()) as store:
-        accepted = store.create_initial(snapshot)
-        backend = CloneBackend(store, schema, accepted, initial, oracle, Performance())
+        accepted, accepted_state = store.create_initial(snapshot, schema)
+        backend = CloneBackend(store, schema, accepted, accepted_state, oracle, Performance())
         assert backend.attempt(("public", "child"), initial[("public", "child")][1:])
         expected = backend.state()[("public", "marker")]
         assert expected != initial[("public", "marker")]
@@ -940,6 +1030,7 @@ def test_clone_promotion_keeps_exact_trigger_result(workspace, tmp_path):
 def test_clone_preflight_rejects_publications(workspace, tmp_path):
     with psycopg.connect(workspace.dsn) as conn:
         conn.execute("CREATE PUBLICATION dbreduce_test_publication FOR TABLE parent")
+        schema = inspect_database(conn)
         with pytest.raises(ValueError, match="publications"):
             check_clone_source(conn)
     snapshot = tmp_path / "source.dump"
@@ -947,7 +1038,7 @@ def test_clone_preflight_rejects_publications(workspace, tmp_path):
     admin = os.environ["DBREDUCE_TEST_ADMIN"]
     with CloneStore(admin, read_settings(workspace.dsn), Performance()) as store:
         with pytest.raises(ValueError, match="publications"):
-            store.create_initial(snapshot)
+            store.create_initial(snapshot, schema)
 
 
 @pytest.mark.parametrize(
@@ -972,8 +1063,10 @@ def test_clone_interrupt_cleans_only_owned_databases(workspace, tmp_path, phase)
     admin = os.environ["DBREDUCE_TEST_ADMIN"]
     with pytest.raises(KeyboardInterrupt):
         with CloneStore(admin, read_settings(workspace.dsn), Performance()) as store:
-            accepted = store.create_initial(snapshot)
-            backend = CloneBackend(store, schema, accepted, initial, oracle, Performance())
+            accepted, accepted_state = store.create_initial(snapshot, schema)
+            backend = CloneBackend(
+                store, schema, accepted, accepted_state, oracle, Performance()
+            )
             if phase in ("candidate_clone", "oracle_clone"):
                 original_clone = store.clone
                 clone_count = 0
@@ -1015,9 +1108,11 @@ def test_clone_interrupt_cleans_only_owned_databases(workspace, tmp_path, phase)
 def test_clone_cleanup_interrupt_names_owned_leftover(workspace, tmp_path):
     snapshot = tmp_path / "source.dump"
     dump(workspace.dsn, snapshot)
+    with psycopg.connect(workspace.dsn) as conn:
+        schema = inspect_database(conn)
     admin = os.environ["DBREDUCE_TEST_ADMIN"]
     with CloneStore(admin, read_settings(workspace.dsn), Performance()) as store:
-        accepted = store.create_initial(snapshot)
+        accepted, _ = store.create_initial(snapshot, schema)
         with patch.object(store, "drop", side_effect=KeyboardInterrupt):
             with pytest.raises(RuntimeError, match=accepted.name + ".*KeyboardInterrupt"):
                 store.close()

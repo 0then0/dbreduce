@@ -10,6 +10,7 @@ import psycopg
 from psycopg import sql
 from psycopg.conninfo import make_conninfo
 
+from dbreduce.models.schema import Schema, State
 from dbreduce.performance import Performance
 from dbreduce.postgres.database import (
     DatabaseSettings,
@@ -17,6 +18,7 @@ from dbreduce.postgres.database import (
     initial_database_statement,
 )
 from dbreduce.postgres.dump import restore
+from dbreduce.postgres.rows import read_rows
 
 
 @dataclass
@@ -179,25 +181,39 @@ class CloneStore:
             if clone:
                 self.clone_failures += 1
             if name in self.unproven:
+                # A PostgreSQL ErrorResponse with SQLSTATE means CREATE was rejected. Check
+                # by exact generated name before deciding the outcome is still ambiguous.
+                if isinstance(error, psycopg.Error) and error.sqlstate is not None:
+                    try:
+                        with self._admin() as conn:
+                            row = conn.execute(
+                                "SELECT EXISTS (SELECT 1 FROM pg_database WHERE datname = %s)",
+                                (name,),
+                            ).fetchone()
+                        if row is not None and not row[0]:
+                            self.unproven.discard(name)
+                    except psycopg.Error:
+                        pass
+                if name not in self.unproven:
+                    raise error
                 raise RuntimeError(
                     f"Creation outcome for database {name} is unverified; "
                     "inspect it manually before removal"
                 ) from error
             raise
 
-    def create_initial(self, snapshot: Path) -> OwnedDatabase:
+    def create_initial(self, snapshot: Path, schema: Schema) -> tuple[OwnedDatabase, State]:
         database = self._create(
             lambda name: initial_database_statement(name, self.settings)
         )
         with self.performance.measure("restore"):
             restore(self.dsn(database), snapshot, jobs=self.restore_jobs)
-        self.preflight(database)
-        self.freeze(database)
-        return database
-
-    def preflight(self, database: OwnedDatabase) -> None:
         with psycopg.connect(self.dsn(database), connect_timeout=10) as conn:
             check_clone_source(conn)
+            with self.performance.measure("accepted_state_read"):
+                initial_state, _ = read_rows(conn, schema)
+        self.freeze(database)
+        return database, initial_state
 
     def _verify(self, database: OwnedDatabase) -> None:
         if self.owned.get(database.name) is not database:

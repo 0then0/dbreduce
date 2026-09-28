@@ -40,9 +40,13 @@ The large surrounding dataset was generated application noise, not a production 
 NetBox #17498 uses the real NetBox v4.1.1 application/form path for a bulk import
 lookup where duplicate manufacturer
 descriptions trigger `Manufacturer.MultipleObjectsReturned`. DBReduce reduced a
-1,335-row NetBox database to 2 rows while preserving
+1,335-row database reconstructed from available scripts to 2 rows while preserving
 `netbox-17498-manufacturer-description-multiple-objects`. Fresh restore
 reproduced the same signature on PostgreSQL 17.
+The exact database used by the issue author is not publicly available; issue
+#17498 provides reproduction steps but no dump. A separate reduction using the
+official NetBox 4.1 demo dump is recorded in the [v0.3 benchmark evidence](benchmark.md#v03-development-evidence-unreleased)
+and [NetBox case report](cases/netbox-17498.md).
 
 Detailed notes:
 

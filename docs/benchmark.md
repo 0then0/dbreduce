@@ -16,6 +16,12 @@ historical context rather than a controlled before/after comparison.
 Every run used the same rebuilt source database, Wagtail oracle, `--confirm 2`,
 MacBook Air M1 (8 cores, 8 GB RAM, internal SSD), macOS 15.7.9, Docker Desktop,
 PostgreSQL 17.11 server, PostgreSQL 18.6 client tools, and Python 3.14.7.
+The PostgreSQL client tools were host wrappers that started a fresh
+`postgres:18-trixie` Docker container for each `pg_dump` or `pg_restore`
+invocation. Therefore dump and restore phase times include Docker process and
+container startup. Both backends used the same wrappers, but snapshot performs
+many more client invocations; these results compare the complete configured
+workflows and do not isolate PostgreSQL restore throughput from wrapper cost.
 The four variants were run in interleaved order (serial, parallel, WAL_LOG,
 FILE_COPY), three repetitions each. All 12 runs reduced 150,706 rows to the
 same 3 collection rows (including IDs and values), retained the required
@@ -77,15 +83,28 @@ contender in this environment**. It is not represented by an ordinary
 Separately, a full PostgreSQL 18 Wagtail reduction completed in clone WAL_LOG
 mode (150,706 to 3 rows, 61.395s, same identity and fresh logical restore).
 The NetBox v4.1.1 form-path case completed in clone WAL_LOG mode on PostgreSQL
-17 (1,323 to 2 rows, 47.511s, same identity and fresh logical restore). The
-NetBox database was rebuilt from available scripts; its 1,323 rows differ from
-the historical 1,335-row source. Setup and negative control use some raw SQL
-because of Redis-dependent delete signals; this is not an HTTP end-to-end test.
+17 (1,323 to 2 rows, 47.511s, same identity and fresh logical restore). This
+earlier database was reconstructed from available scripts, not obtained from
+the issue reporter; its row count differed from another reconstructed 1,335-row
+dataset. The exact database used by the issue author is not publicly available.
+Separately, the official NetBox 4.1 demo SQL dump was restored on PostgreSQL 17
+and the NetBox v4.1.1 form oracle reproduced issue #17498 after adding its two
+duplicate manufacturers. This is a public alternative dataset, not the issue
+author's database. A full clone / WAL_LOG reduction on this dataset took
+262.958s (21,381 to 2 rows, 113 oracle executions), preserved the signature,
+and passed a fresh PostgreSQL 17 plain-SQL restore and oracle confirmation. This
+was one run, not a repeated performance comparison. Setup and negative control
+use some raw SQL because of Redis-dependent delete signals; this is not an HTTP
+end-to-end test. After the ownership and Accepted-state fixes, the complete
+integration suite passed 112 tests with native PostgreSQL 17 clients and 112
+with native PostgreSQL 18 clients. The hosted CI counts below still refer to the
+previous pushed revision.
 As a separate export check, plain SQL from the PG17 Wagtail, PG18 Wagtail and
 PG17 NetBox clone runs was loaded with native `psql` into new databases. Each
-application oracle reproduced its original signature there. The PG17 and PG18
-native-client integration suites each passed 105 tests locally. Hosted CI for
-the new PostgreSQL matrix has not run on this working tree.
+application oracle reproduced its original signature there. The previously
+pushed `b331654` revision passed 109 tests in each PostgreSQL 17 and 18 hosted
+CI job; the ownership and Accepted-state regression tests added after that
+revision require a new CI run.
 
 ## Real-world v0.2 results
 

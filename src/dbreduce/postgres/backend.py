@@ -122,6 +122,23 @@ class CloneBackend:
     def state(self) -> State:
         return self.current
 
+    def confirm_initial_state(self) -> bool:
+        """Check the accepted snapshot through independent, disposable oracle clones."""
+        oracle_db: OwnedDatabase | None = None
+
+        def prepare() -> str:
+            nonlocal oracle_db
+            oracle_db = self.store.clone(self.accepted_db)
+            return self.store.url(oracle_db)
+
+        def cleanup() -> None:
+            nonlocal oracle_db
+            if oracle_db is not None:
+                self.store.drop(oracle_db)
+                oracle_db = None
+
+        return self.oracle.fails("", prepare, cleanup)
+
     def attempt(self, table: TableKey, rows: list[RowKey]) -> bool:
         self.probes += 1
         candidate_db = self.store.clone(self.accepted_db)

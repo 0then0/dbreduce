@@ -21,8 +21,20 @@ def test_plain_sql_rejected_before_any_external_command(tmp_path):
 def test_cleanup_targets_only_generated_database():
     connection = MagicMock()
     connection.__enter__.return_value = connection
+    workspace = Workspace("postgresql:///original")
+
+    def execute(query, *_args):
+        cursor = MagicMock()
+        statement = query.as_string() if hasattr(query, "as_string") else query
+        if statement.startswith("SELECT oid, datdba FROM pg_database"):
+            cursor.fetchone.return_value = (123, 456)
+        elif statement.startswith("SELECT oid, datdba, shobj_description"):
+            cursor.fetchone.return_value = (123, 456, workspace.marker)
+        return cursor
+
+    connection.execute.side_effect = execute
     with patch("dbreduce.postgres.database.psycopg.connect", return_value=connection):
-        with Workspace("postgresql:///original") as workspace:
+        with workspace:
             workspace.create()
             name = workspace.name
     statements = [
@@ -35,9 +47,13 @@ def test_cleanup_targets_only_generated_database():
         "SET statement_timeout = '600s'",
         "SELECT pg_advisory_lock(%s)",
         f'CREATE DATABASE "{name}" TEMPLATE template0',
+        "SELECT oid, datdba FROM pg_database WHERE datname = %s",
+        f'COMMENT ON DATABASE "{name}" IS \'{workspace.marker}\'',
         "SET statement_timeout = '600s'",
         "SELECT pg_advisory_lock(%s)",
-        f'DROP DATABASE IF EXISTS "{name}" WITH (FORCE)',
+        "SELECT oid, datdba, shobj_description(oid, 'pg_database') "
+        "FROM pg_database WHERE datname = %s",
+        f'DROP DATABASE "{name}" WITH (FORCE)',
     ]
     lock_calls = [
         call
@@ -51,47 +67,79 @@ def test_cleanup_targets_only_generated_database():
 def test_restore_failure_still_drops_created_copy(tmp_path):
     connection = MagicMock()
     connection.__enter__.return_value = connection
+    workspace = Workspace("postgresql:///original")
+
+    def execute(query, *_args):
+        cursor = MagicMock()
+        statement = query.as_string() if hasattr(query, "as_string") else query
+        if statement.startswith("SELECT oid, datdba FROM pg_database"):
+            cursor.fetchone.return_value = (123, 456)
+        elif statement.startswith("SELECT oid, datdba, shobj_description"):
+            cursor.fetchone.return_value = (123, 456, workspace.marker)
+        return cursor
+
+    connection.execute.side_effect = execute
     with patch("dbreduce.postgres.database.psycopg.connect", return_value=connection):
         with patch(
             "dbreduce.postgres.database.restore", side_effect=RuntimeError("restore failed")
         ):
             with pytest.raises(RuntimeError, match="restore failed"):
-                with Workspace("postgresql:///original") as workspace:
+                with workspace:
                     workspace.reset(tmp_path / "dump")
     assert not workspace.created
     statement = connection.execute.call_args.args[0].as_string()
-    assert statement.startswith('DROP DATABASE IF EXISTS "dbreduce_')
+    assert statement.startswith('DROP DATABASE "dbreduce_')
 
 
 def test_interrupt_after_create_still_drops_copy():
     connection = MagicMock()
     connection.__enter__.return_value = connection
+    workspace = Workspace("postgresql:///original")
     connection.__exit__.side_effect = [KeyboardInterrupt, None]
+
+    def execute(query, *_args):
+        cursor = MagicMock()
+        statement = query.as_string() if hasattr(query, "as_string") else query
+        if statement.startswith("SELECT oid, datdba FROM pg_database"):
+            cursor.fetchone.return_value = (123, 456)
+        elif statement.startswith("SELECT oid, datdba, shobj_description"):
+            cursor.fetchone.return_value = (123, 456, workspace.marker)
+        return cursor
+
+    connection.execute.side_effect = execute
     with patch("dbreduce.postgres.database.psycopg.connect", return_value=connection):
         with pytest.raises(KeyboardInterrupt):
-            with Workspace("postgresql:///original") as workspace:
+            with workspace:
                 workspace.create()
     assert not workspace.created
     statement = connection.execute.call_args.args[0].as_string()
-    assert statement.startswith('DROP DATABASE IF EXISTS "dbreduce_')
+    assert statement.startswith('DROP DATABASE "dbreduce_')
 
 
-def test_uncertain_create_result_still_attempts_cleanup():
+def test_uncertain_create_result_is_not_dropped_by_name():
     connection = MagicMock()
     connection.__enter__.return_value = connection
+    workspace = Workspace("postgresql:///original")
 
     def execute(query, *_args):
         if hasattr(query, "as_string") and query.as_string().startswith("CREATE DATABASE"):
             raise psycopg.OperationalError("server reply lost")
+        cursor = MagicMock()
+        if query.startswith("SELECT EXISTS"):
+            cursor.fetchone.return_value = (True,)
+        return cursor
 
     connection.execute.side_effect = execute
     with patch("dbreduce.postgres.database.psycopg.connect", return_value=connection):
-        with pytest.raises(psycopg.OperationalError, match="server reply lost"):
-            with Workspace("postgresql:///original") as workspace:
+        with pytest.raises(RuntimeError, match="unverified"):
+            with workspace:
                 workspace.create()
+    # __exit__ must query separately to report the exact ambiguous name, but never DROP it.
     assert not workspace.created
-    assert connection.execute.call_args.args[0].as_string() == (
-        f'DROP DATABASE IF EXISTS "{workspace.name}" WITH (FORCE)'
+    assert not any(
+        "DROP DATABASE" in call.args[0].as_string()
+        for call in connection.execute.call_args_list
+        if hasattr(call.args[0], "as_string")
     )
 
 

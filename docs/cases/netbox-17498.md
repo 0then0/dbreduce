@@ -36,12 +36,43 @@ The baseline control was:
 
 ## Dataset
 
-The source database used NetBox's real v4.1.1 migrations on PostgreSQL 17. It had
-1,335 rows across 179 tables, with 5 populated tables before reduction. This case
-was intentionally smaller than the Wagtail benchmark; Wagtail was used for the
-100k+ validation run.
+The exact database used by the issue author is unavailable. [Issue #17498](https://github.com/netbox-community/netbox/issues/17498)
+describes how to create two manufacturers with the same description and shows
+the resulting exception; it does not include a database dump. The earlier
+1,335-row validation database was reconstructed with NetBox v4.1.1 migrations
+and setup scripts. It is not the issue author's database.
 
-## DBReduce command
+The official [NetBox 4.1 demo SQL dump](https://github.com/netbox-community/netbox-demo-data/blob/master/sql/netbox-demo-v4.1.sql)
+is a public alternative source dataset for this application version. It was
+restored into PostgreSQL 17 (the dump's original PostgreSQL version is 14.12),
+after creating its referenced `netbox` role. The duplicate-manufacturer
+condition from the issue was then added. The NetBox v4.1.1 form oracle reproduced
+`netbox-17498-manufacturer-description-multiple-objects` on that restored
+dataset. This validates the demo dataset and application path, not the original
+user database.
+
+The case is intentionally smaller than the Wagtail benchmark; Wagtail was used
+for the 100k+ validation run.
+
+### Public demo dataset run
+
+On 2026-09-28, the official NetBox 4.1 demo dump was restored to PostgreSQL
+17.11. The issue condition was added through the NetBox v4.1.1 ORM, then the
+clone backend completed a full reduction:
+
+- Initial: 21,381 rows across 180 tables.
+- Final: 2 rows.
+- Elapsed: 262.958s, including 113 oracle executions.
+- Backend: clone / `WAL_LOG`; 177 created databases, all 177 dropped, no cleanup
+  failures.
+- Final signature matched the initial signature.
+- The published plain SQL was loaded into a new database with PostgreSQL 17.11
+  `psql`; the same NetBox oracle reproduced the signature after that fresh
+  restore.
+
+This is one end-to-end validation run, not a repeated performance benchmark.
+
+### Earlier reconstructed-dataset command
 
 ```bash
 TMPDIR=/private/tmp PATH=/private/tmp/dbreduce-pgtools:$PATH \
@@ -55,7 +86,7 @@ TMPDIR=/private/tmp PATH=/private/tmp/dbreduce-pgtools:$PATH \
 
 No virtual relationships were used.
 
-## Result
+### Earlier reconstructed-dataset result
 
 - Initial: 1,335 rows, 179 tables, 5 populated tables.
 - Final: 2 rows, 179 tables, 1 populated table.

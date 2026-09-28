@@ -223,14 +223,16 @@ def reduce_command(
                             )
                         )
                         store.probe_file_copy_clone()
-                        accepted_db = store.create_initial(snapshot)
-                        with psycopg.connect(workspace.dsn, connect_timeout=10) as conn:
-                            with performance.measure("candidate_state_read"):
-                                initial_state, _ = read_rows(conn, schema)
+                        accepted_db, initial_state = store.create_initial(snapshot, schema)
                         clone_backend = CloneBackend(
                             store, schema, accepted_db, initial_state, runner, performance,
                             typer.echo,
                         )
+                        if not clone_backend.confirm_initial_state():
+                            raise ValueError(
+                                "Oracle did not reproduce the required failure "
+                                "on the accepted state"
+                            )
                         backend: CloneBackend | PostgresBackend = clone_backend
                     else:
                         backend = PostgresBackend(

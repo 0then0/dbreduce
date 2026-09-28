@@ -182,6 +182,10 @@ class Workspace:
         self.url = database_url(admin_dsn, self.name)
         self.settings = settings
         self.created = False
+        self.owner: int | None = None
+        self.oid: int | None = None
+        self.marker = "dbreduce-workspace:" + uuid.uuid4().hex
+        self.unproven = False
         self.databases_created = 0
         self.databases_dropped = 0
         self.cleanup_failures = 0
@@ -193,21 +197,53 @@ class Workspace:
 
     def create(self) -> None:
         self.close()
-        with psycopg.connect(self.admin_dsn, autocommit=True, connect_timeout=10) as conn:
-            conn.execute("SET statement_timeout = '600s'")
-            # Keep cleanup behind a CREATE that continues after its client loses the reply.
-            conn.execute("SELECT pg_advisory_lock(%s)", (self.lock_key,))
-            statement = initial_database_statement(self.name, self.settings)
-            # CREATE may commit even if its reply is lost; cleanup must still try the name.
-            self.created = True
-            try:
+        statement = initial_database_statement(self.name, self.settings)
+        try:
+            with psycopg.connect(self.admin_dsn, autocommit=True, connect_timeout=10) as conn:
+                conn.execute("SET statement_timeout = '600s'")
+                conn.execute("SELECT pg_advisory_lock(%s)", (self.lock_key,))
+                # A lost CREATE reply is ambiguous. A name alone is never ownership proof.
+                self.unproven = True
                 with self.performance.measure("database_create"):
                     conn.execute(statement)
+                row = conn.execute(
+                    "SELECT oid, datdba FROM pg_database WHERE datname = %s", (self.name,)
+                ).fetchone()
+                if row is None:
+                    raise RuntimeError(f"Cannot verify created workspace database {self.name}")
+                conn.execute(
+                    sql.SQL("COMMENT ON DATABASE {} IS {}").format(
+                        sql.Identifier(self.name), sql.Literal(self.marker)
+                    )
+                )
+                self.oid, self.owner = int(row[0]), int(row[1])
+                self.created = True
+                self.unproven = False
                 self.databases_created += 1
-            except psycopg.errors.DuplicateDatabase:
-                # This name existed before our CREATE; it is not ours to drop.
-                self.created = False
-                raise
+        except psycopg.errors.DuplicateDatabase:
+            self.unproven = False
+            raise
+        except BaseException as error:
+            # SQLSTATE proves PostgreSQL rejected the statement. A transport failure does not.
+            if getattr(error, "sqlstate", None) is not None:
+                try:
+                    with psycopg.connect(
+                        self.admin_dsn, connect_timeout=10
+                    ) as conn:
+                        row = conn.execute(
+                            "SELECT EXISTS (SELECT 1 FROM pg_database WHERE datname = %s)",
+                            (self.name,),
+                        ).fetchone()
+                    if row is not None and not row[0]:
+                        self.unproven = False
+                except psycopg.Error:
+                    pass
+            if self.unproven:
+                raise RuntimeError(
+                    f"Creation outcome for workspace database {self.name} is unverified; "
+                    "inspect it manually before removal"
+                ) from error
+            raise
 
     def reset(self, snapshot: Path) -> None:
         self.create()
@@ -220,12 +256,27 @@ class Workspace:
                 with psycopg.connect(self.admin_dsn, autocommit=True, connect_timeout=10) as conn:
                     conn.execute("SET statement_timeout = '600s'")
                     conn.execute("SELECT pg_advisory_lock(%s)", (self.lock_key,))
+                    row = conn.execute(
+                        "SELECT oid, datdba, shobj_description(oid, 'pg_database') "
+                        "FROM pg_database WHERE datname = %s",
+                        (self.name,),
+                    ).fetchone()
+                    if row is None or (row[0], row[1], row[2]) != (
+                        self.oid, self.owner, self.marker
+                    ):
+                        raise RuntimeError(
+                            f"Ownership of workspace database {self.name} cannot be verified; "
+                            "inspect it manually before removal"
+                        )
                     with self.performance.measure("database_cleanup"):
                         conn.execute(
-                            sql.SQL("DROP DATABASE IF EXISTS {} WITH (FORCE)").format(
+                            sql.SQL("DROP DATABASE {} WITH (FORCE)").format(
                                 sql.Identifier(self.name)
                             )
                         )
+            except RuntimeError:
+                self.cleanup_failures += 1
+                raise
             except psycopg.Error as error:
                 self.cleanup_failures += 1
                 raise RuntimeError(
@@ -233,7 +284,28 @@ class Workspace:
                     "inspect and remove it if present"
                 ) from error
             self.created = False
+            self.oid = self.owner = None
             self.databases_dropped += 1
+        if self.unproven:
+            try:
+                with psycopg.connect(self.admin_dsn, connect_timeout=10) as conn:
+                    row = conn.execute(
+                        "SELECT EXISTS (SELECT 1 FROM pg_database WHERE datname = %s)",
+                        (self.name,),
+                    ).fetchone()
+            except psycopg.Error as error:
+                self.cleanup_failures += 1
+                raise RuntimeError(
+                    f"Could not resolve creation outcome for workspace database {self.name}; "
+                    "inspect it manually before removal"
+                ) from error
+            if row is None or row[0]:
+                self.cleanup_failures += 1
+                raise RuntimeError(
+                    f"Creation outcome for workspace database {self.name} is unverified; "
+                    "inspect it manually before removal"
+                )
+            self.unproven = False
 
     def __exit__(
         self,
