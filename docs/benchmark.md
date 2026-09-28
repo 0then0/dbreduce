@@ -7,10 +7,10 @@ digest `d0a1c9438f3b63140879c69ecc784efa2caa62d7d977defc10e0cb961e53b2c6`). Each
 variant ran three times, sequentially, against the same PostgreSQL 17.11 source,
 Wagtail 8.0 oracle, and `--confirm 2`. The source had 150,706 rows, including
 generated application noise; it was not a production dump. Hardware was a MacBook
-Air M1 (8 cores, 8 GB RAM, internal SSD), macOS 15.7.9. Python was 3.14.7. The
-PostgreSQL 18.6 client wrappers started a fresh Docker container for each
-`pg_dump`/`pg_restore`; timings compare those complete workflows and include
-container startup.
+Air M1 (8 cores, 8 GB RAM, internal SSD), macOS 15.7.9, Docker Engine 29.8.0.
+Python was 3.14.7. The PostgreSQL 18.6 client wrappers started a fresh Docker
+container for each `pg_dump`/`pg_restore`; timings compare those complete
+workflows and include container startup.
 
 | Backend            |    Run 1 |    Run 2 |    Run 3 |   Median |            Range |
 | ------------------ | -------: | -------: | -------: | -------: | ---------------: |
