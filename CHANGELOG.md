@@ -4,7 +4,8 @@ Notable user-facing changes for each published version.
 
 ## [0.3.1] - 2026-09-28
 
-- Add a project icon and this changelog. No runtime behavior changes.
+- Add a project icon, centered README branding, and this changelog. No runtime
+  behavior changes.
 
 ## [0.3.0] - 2026-09-28
 

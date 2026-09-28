@@ -1,12 +1,20 @@
-# <img src="docs/dbreduce-icon.svg" width="44" height="44" alt=""> DBReduce
+<p align="center">
+  <img src="docs/dbreduce-icon.svg" width="80" height="80" alt="DBReduce logo">
+</p>
 
-**Give DBReduce a PostgreSQL database and a failing test. It finds a smaller
-relational dataset that still reproduces the same bug.**
+<h1 align="center">DBReduce</h1>
 
-[![PyPI](https://img.shields.io/pypi/v/dbreduce)](https://pypi.org/project/dbreduce/)
-[![Python](https://img.shields.io/badge/Python-3.13%2B-3776AB)](https://www.python.org/)
-[![License](https://img.shields.io/pypi/l/dbreduce)](LICENSE)
-[![Tests](https://github.com/0then0/dbreduce/actions/workflows/tests.yml/badge.svg?branch=main)](https://github.com/0then0/dbreduce/actions/workflows/tests.yml)
+<p align="center">
+  <strong>Give DBReduce a PostgreSQL database and a failing test.<br>
+  It finds a smaller relational dataset that still reproduces the same bug.</strong>
+</p>
+
+<p align="center">
+  <a href="https://pypi.org/project/dbreduce/"><img src="https://img.shields.io/pypi/v/dbreduce" alt="PyPI"></a>
+  <a href="https://www.python.org/"><img src="https://img.shields.io/badge/Python-3.13%2B-3776AB" alt="Python 3.13+"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/pypi/l/dbreduce" alt="License"></a>
+  <a href="https://github.com/0then0/dbreduce/actions/workflows/tests.yml"><img src="https://github.com/0then0/dbreduce/actions/workflows/tests.yml/badge.svg?branch=main" alt="Tests"></a>
+</p>
 
 DBReduce reduces PostgreSQL data while checking that each candidate preserves the
 original failure identity. It supports output matchers and structured JSON verdicts,
