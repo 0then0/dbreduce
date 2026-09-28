@@ -97,14 +97,12 @@ was one run, not a repeated performance comparison. Setup and negative control
 use some raw SQL because of Redis-dependent delete signals; this is not an HTTP
 end-to-end test. After the ownership and Accepted-state fixes, the complete
 integration suite passed 112 tests with native PostgreSQL 17 clients and 112
-with native PostgreSQL 18 clients. The hosted CI counts below still refer to the
-previous pushed revision.
+with native PostgreSQL 18 clients. Commit `a248633` also passed both hosted
+PostgreSQL matrix jobs, each with 112 tests
+([CI run](https://github.com/0then0/dbreduce/actions/runs/36388139952)).
 As a separate export check, plain SQL from the PG17 Wagtail, PG18 Wagtail and
 PG17 NetBox clone runs was loaded with native `psql` into new databases. Each
-application oracle reproduced its original signature there. The previously
-pushed `b331654` revision passed 109 tests in each PostgreSQL 17 and 18 hosted
-CI job; the ownership and Accepted-state regression tests added after that
-revision require a new CI run.
+application oracle reproduced its original signature there.
 
 ## Real-world v0.2 results
 
