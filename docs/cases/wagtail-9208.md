@@ -63,16 +63,10 @@ No virtual relationships were used.
 - Fresh restore: PASS on PostgreSQL 17.
 - PostgreSQL 18 integration check: PASS by restoring the minimized SQL and running the same oracle.
 
-The three repeated PostgreSQL 17 runs used the same source dataset, oracle,
-hardware, PostgreSQL settings and DBReduce version:
-
-| Run |  Elapsed | Oracle time | Oracle executions | Candidate probes | Accepted | Rejected | Cache hits |
-| --- | -------: | ----------: | ----------------: | ---------------: | -------: | -------: | ---------: |
-| 1   | 103.316s |     23.495s |                33 |               21 |        9 |       12 |          1 |
-| 2   | 103.419s |     23.606s |                33 |               21 |        9 |       12 |          1 |
-| 3   | 104.722s |     23.599s |                33 |               21 |        9 |       12 |          1 |
-
-Median elapsed time: 103.419s. Range: 103.316s to 104.722s.
+The v0.2 repeated measurements and the current v0.3 backend comparison are in
+the [benchmark report](../benchmark.md#v03-wagtail-comparison). The v0.3 runs
+used this same generated application dataset and preserved the same failure
+identity after fresh logical restore.
 
 ## Notes
 

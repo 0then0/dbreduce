@@ -1,159 +1,70 @@
-# Benchmark and validation results
+# Benchmark
 
-## v0.3 development evidence (unreleased)
+## v0.3 Wagtail comparison
 
-This series used the v0.3 working tree based on commit `55ac5f6`, with the same
-source code throughout the 12 runs. It is not a measurement of a tagged v0.3.0
-release. The benchmark source-tree digest was
-`2a3fcceeb4512d7e9df22a9e7c1419058cbc8b6475bcf48e6b0ba76c76b79f20`
-(`find src -name '*.py' -print0 | sort -z | xargs -0 shasum -a 256 | shasum -a 256`).
-The Wagtail #9208 source was rebuilt from the validation scripts found
-under `/private/tmp/dbreduce-validation/wagtail`: real Wagtail 8.0 schema and bug,
-150,706 rows including generated application noise, not a production dump. The
-original v0.2 database was no longer available, so the old v0.2 times below are
-historical context rather than a controlled before/after comparison.
+Repeated on 2026-09-28 with DBReduce source at commit `6c10073` (Python source
+digest `d0a1c9438f3b63140879c69ecc784efa2caa62d7d977defc10e0cb961e53b2c6`). Each
+variant ran three times, sequentially, against the same PostgreSQL 17.11 source,
+Wagtail 8.0 oracle, and `--confirm 2`. The source had 150,706 rows, including
+generated application noise; it was not a production dump. Hardware was a MacBook
+Air M1 (8 cores, 8 GB RAM, internal SSD), macOS 15.7.9. Python was 3.14.7. The
+PostgreSQL 18.6 client wrappers started a fresh Docker container for each
+`pg_dump`/`pg_restore`; timings compare those complete workflows and include
+container startup.
 
-Every run used the same rebuilt source database, Wagtail oracle, `--confirm 2`,
-MacBook Air M1 (8 cores, 8 GB RAM, internal SSD), macOS 15.7.9, Docker Desktop,
-PostgreSQL 17.11 server, PostgreSQL 18.6 client tools, and Python 3.14.7.
-The PostgreSQL client tools were host wrappers that started a fresh
-`postgres:18-trixie` Docker container for each `pg_dump` or `pg_restore`
-invocation. Therefore dump and restore phase times include Docker process and
-container startup. Both backends used the same wrappers, but snapshot performs
-many more client invocations; these results compare the complete configured
-workflows and do not isolate PostgreSQL restore throughput from wrapper cost.
-The four variants were run in interleaved order (serial, parallel, WAL_LOG,
-FILE_COPY), three repetitions each. All 12 runs reduced 150,706 rows to the
-same 3 collection rows (including IDs and values), retained the required
-failure identity, and passed final fresh logical restore confirmation.
+| Backend            |    Run 1 |    Run 2 |    Run 3 |   Median |            Range |
+| ------------------ | -------: | -------: | -------: | -------: | ---------------: |
+| Snapshot, jobs=1   | 143.539s | 115.981s | 114.422s | 115.981s | 114.422–143.539s |
+| Snapshot, jobs=4   | 105.025s | 108.337s | 104.086s | 105.025s | 104.086–108.337s |
+| Clone, `WAL_LOG`   |  58.990s |  60.407s |  59.610s |  59.610s |   58.990–60.407s |
+| Clone, `FILE_COPY` |  58.067s |  58.716s |  57.790s |  58.067s |   57.790–58.716s |
 
-| Backend / strategy | Restore jobs | Run 1 | Run 2 | Run 3 | Median | Range |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| Snapshot | 1 | 113.510s | 116.719s | 105.557s | 113.510s | 105.557–116.719s |
-| Snapshot | 4 | 104.880s | 101.953s | 100.422s | 101.953s | 100.422–104.880s |
-| Clone / WAL_LOG | 1 | 57.534s | 55.721s | 56.937s | 56.937s | 55.721–57.534s |
-| Clone / FILE_COPY | 1 | 57.156s | 53.951s | 53.649s | 53.951s | 53.649–57.156s |
+All 12 runs reduced the database to 3 rows in `wagtailcore_collection`, retained
+the same failure identity, and passed final logical restore confirmation. Snapshot
+had 21 candidate dumps and 21 fingerprint dumps per run; clone had 54 database
+clones, 21 candidates, and 36 oracle executions. All clone-created databases
+were dropped; no clone failures, fallbacks, or cleanup failures were reported.
 
-Median phase totals below come from `performance.phases` in the reports. The
-counts are the same in each run of a variant. `restore` includes accepted,
-candidate, and oracle resets; `oracle_state_preparation` includes its restore or
-clone; `database_clone` includes candidate and oracle clones. **These phase
-figures overlap and must not be summed.** Each report also gives the average
-per execution of every measured operation.
+Each cell gives the median total seconds; counts in the header follow the same
+backend order as the columns:
 
-| Operation | Snapshot jobs=1 (count / median total) | Snapshot jobs=4 | Clone WAL_LOG | Clone FILE_COPY |
-| --- | ---: | ---: | ---: | ---: |
-| Source dump | 1 / 0.594s | 1 / 0.531s | 1 / 0.529s | 1 / 0.528s |
-| Database create | 78 / 2.111s | 78 / 1.955s | 9 / 0.214s | 9 / 0.221s |
-| Restore | 78 / 51.301s | 78 / 41.449s | 9 / 7.306s | 9 / 7.184s |
-| Database clone | 0 | 0 | 52 / 3.719s | 52 / 4.618s |
-| Candidate deletion | 21 / 9.556s | 21 / 9.758s | 21 / 9.388s | 21 / 9.430s |
-| Candidate dump | 21 / 8.390s | 21 / 8.293s | 0 | 0 |
-| Candidate state read | 22 / 2.949s | 22 / 2.985s | 23 / 2.705s | 23 / 2.658s |
-| Fingerprint dump | 21 / 8.094s | 21 / 8.082s | 0 | 0 |
-| Fingerprint hash | 21 / 0.170s | 21 / 0.166s | 0 | 0 |
-| Oracle preparation | 33 / 23.622s | 33 / 19.862s | 34 / 6.468s | 34 / 6.766s |
-| Oracle process | 33 / 25.893s | 33 / 24.155s | 34 / 24.884s | 34 / 23.968s |
-| Database cleanup | 78 / 1.406s | 78 / 1.377s | 61 / 3.023s | 61 / 0.970s |
-| Final normalization | 1 / 0.582s | 1 / 0.519s | 2 / 1.139s | 2 / 1.230s |
-| Final export | 1 / 0.360s | 1 / 0.374s | 1 / 0.343s | 1 / 0.341s |
+| Operation                              | Snapshot jobs=1 | Snapshot jobs=4 | Clone `WAL_LOG` | Clone `FILE_COPY` |
+| -------------------------------------- | --------------: | --------------: | --------------: | ----------------: |
+| Restore (78 / 78 / 9 / 9)              |          51.428 |          43.063 |           7.459 |             7.437 |
+| Database create (78 / 78 / 9 / 9)      |           2.266 |           2.252 |           0.241 |             0.251 |
+| Database clone (0 / 0 / 54 / 54)       |               0 |               0 |           4.639 |             4.998 |
+| Candidate deletion (21 / 21 / 21 / 21) |           9.392 |           9.377 |           9.061 |             9.383 |
+| Candidate dump (21 / 21 / 0 / 0)       |           8.878 |           8.470 |               0 |                 0 |
+| Fingerprint dump (21 / 21 / 0 / 0)     |           8.275 |           8.412 |               0 |                 0 |
+| Oracle preparation (33 / 33 / 36 / 36) |          24.500 |          20.300 |           7.077 |             7.486 |
+| Oracle process (33 / 33 / 36 / 36)     |          26.035 |          25.063 |          26.847 |            26.232 |
+| Database cleanup (78 / 78 / 63 / 63)   |           1.448 |           1.632 |           3.002 |             1.053 |
 
-The repeated snapshot profile identifies reconstruction, candidate deletion,
-candidate/fingerprint dumps, and oracle process execution as separate costs.
-It does not infer dump/restore time from `total - oracle time`. Snapshot had one
-exact-cache hit per run (1/21 lookups, 4.8%); the report estimates roughly
-1.3–1.6 seconds saved per run. Exact fingerprint dumps cost about 8 seconds.
-Clone disables this cache because its exact key costs more than this observed
-benefit, without substituting requested deletions for database-state identity.
+The phase totals overlap: for example, restore is included in oracle preparation.
+Do not sum the rows. Reports include execution averages and the remaining
+instrumented phases. On this workload, parallel restore improved snapshot median
+time by about 9%; clone reduced the median by 43–45% compared with snapshot at
+jobs=4. `FILE_COPY` was 1.5s faster at the median than `WAL_LOG`, but three runs
+do not establish a reliable winner between clone strategies. Clone remains
+opt-in; these results cover one application dataset and environment.
 
-Parallel `pg_restore` improved this Wagtail workload but remains opt-in because
-the default 1 worker preserves the established behavior. Clone was clearly
-faster than either snapshot variant here; `WAL_LOG` and `FILE_COPY` ranges
-overlap, so this data does not establish a reliable winner between them. Clone
-stays opt-in while compatibility and cleanup behavior are assessed beyond these
-cases. No parallel `pg_dump` or archive-format change was introduced.
+PostgreSQL 18 `FILE_COPY` with `file_copy_method=CLONE` passed the CREATE DATABASE
+API probe, but reflink was unsupported on the container's PostgreSQL data
+filesystem (`cp --reflink=always` returned “Operation not supported”). No
+filesystem-clone timing is claimed. A full PostgreSQL 18 Wagtail reduction was
+also completed in an earlier development run; see [validation history](real-world-validation.md).
 
-PostgreSQL 18 `FILE_COPY` with `file_copy_method=CLONE` passed a PostgreSQL
-CREATE DATABASE API probe, but `cp --reflink=always` failed with “Operation not
-supported” on the container's PostgreSQL data filesystem. Actual block sharing
-was not verified, so **filesystem CLONE is unsupported as a measured copy-on-write
-contender in this environment**. It is not represented by an ordinary
-`FILE_COPY` timing above.
+The NetBox v4.1.1 case using the official NetBox 4.1 demo SQL dump completed one
+full reduction on PostgreSQL 17: 21,381 to 2 rows in 262.958s, with 113 oracle
+executions and a successful fresh SQL restore. The issue reporter's exact
+database is unavailable. NetBox setup and negative control partly used raw SQL
+because delete signals depend on Redis; the positive oracle exercised the real
+form path, not a full HTTP flow. See the [NetBox case](cases/netbox-17498.md).
 
-Separately, a full PostgreSQL 18 Wagtail reduction completed in clone WAL_LOG
-mode (150,706 to 3 rows, 61.395s, same identity and fresh logical restore).
-The NetBox v4.1.1 form-path case completed in clone WAL_LOG mode on PostgreSQL
-17 (1,323 to 2 rows, 47.511s, same identity and fresh logical restore). This
-earlier database was reconstructed from available scripts, not obtained from
-the issue reporter; its row count differed from another reconstructed 1,335-row
-dataset. The exact database used by the issue author is not publicly available.
-Separately, the official NetBox 4.1 demo SQL dump was restored on PostgreSQL 17
-and the NetBox v4.1.1 form oracle reproduced issue #17498 after adding its two
-duplicate manufacturers. This is a public alternative dataset, not the issue
-author's database. A full clone / WAL_LOG reduction on this dataset took
-262.958s (21,381 to 2 rows, 113 oracle executions), preserved the signature,
-and passed a fresh PostgreSQL 17 plain-SQL restore and oracle confirmation. This
-was one run, not a repeated performance comparison. Setup and negative control
-use some raw SQL because of Redis-dependent delete signals; this is not an HTTP
-end-to-end test. After the ownership and Accepted-state fixes, the complete
-integration suite passed 112 tests with native PostgreSQL 17 clients and 112
-with native PostgreSQL 18 clients. Commit `a248633` also passed both hosted
-PostgreSQL matrix jobs, each with 112 tests
-([CI run](https://github.com/0then0/dbreduce/actions/runs/36388139952)).
-As a separate export check, plain SQL from the PG17 Wagtail, PG18 Wagtail and
-PG17 NetBox clone runs was loaded with native `psql` into new databases. Each
-application oracle reproduced its original signature there.
+## Reproducible demo benchmark
 
-## Real-world v0.2 results
-
-Validated DBReduce version: 0.2.0 at repository commit
-`a6e0f6c4c88bd9221d0cb81540b94ab617229b0b`.
-
-Environment:
-
-- OS: macOS 15.6 Darwin 24.6.0, arm64.
-- Hardware: MacBook Air, Apple M1, 8 cores, 8 GB RAM.
-- Storage: internal MacBook Air SSD.
-- Python running DBReduce: 3.14.7 from `.venv`.
-- PostgreSQL 17 server: `17.11 (Debian 17.11-1.pgdg13+2)`.
-- PostgreSQL 18 integration check server: `18.6 (Debian 18.6-1.pgdg13+2)`.
-- PostgreSQL client tools: `postgres:18-trixie` container wrappers for
-  `pg_dump`, `pg_restore`, and `psql`.
-- Docker: Docker Desktop 4.92.0, Engine 29.8.0.
-
-| Case          | Initial rows | Final rows | Oracle runs | Candidate probes | Accepted | Rejected |  Elapsed | Oracle time | Fresh restore |
-| ------------- | -----------: | ---------: | ----------: | ---------------: | -------: | -------: | -------: | ----------: | ------------- |
-| Wagtail #9208 |      150,706 |          3 |          33 |               21 |        9 |       12 | 103.316s |     23.495s | PASS          |
-| NetBox #17498 |        1,335 |          2 |          16 |                9 |        3 |        6 |  91.179s |     27.983s | PASS          |
-
-The Wagtail case was repeated three times with identical hardware, PostgreSQL
-configuration, source dataset, oracle, DBReduce version, and confirmation count:
-
-| Run |  Elapsed | Oracle time | Oracle executions | Candidate probes | Accepted | Rejected | Cache hits |
-| --- | -------: | ----------: | ----------------: | ---------------: | -------: | -------: | ---------: |
-| 1   | 103.316s |     23.495s |                33 |               21 |        9 |       12 |          1 |
-| 2   | 103.419s |     23.606s |                33 |               21 |        9 |       12 |          1 |
-| 3   | 104.722s |     23.599s |                33 |               21 |        9 |       12 |          1 |
-
-Median elapsed time: 103.419s. Range: 103.316s to 104.722s.
-
-PostgreSQL 18 compatibility was checked by restoring the minimized Wagtail SQL
-into PostgreSQL 18 and rerunning the same structured oracle. It reproduced the
-same signature.
-
-For details, see [the real-world validation report](real-world-validation.md),
-[Wagtail #9208](cases/wagtail-9208.md), and
-[NetBox #17498](cases/netbox-17498.md).
-
-## Reproducible manual benchmark
-
-Run from the repository root with its existing uv environment and PostgreSQL client
-tools. This uses the real reducer, FK closure, oracle subprocesses, snapshots and
-SQL export. The workload is the demo's relational checkout data at 120,005 rows:
-30,001 users, orders, items and payments, plus one coupon. Only a paid checkout
-with a coupon exceeding the total should reproduce `checkout-negative-total`.
-
-Create an explicitly disposable source database yourself, then load the benchmark:
+The demo benchmark uses 120,005 relational rows and the structured oracle in
+`examples/oracle.py`. Run it only against a newly created disposable database:
 
 ```bash
 createdb dbreduce_benchmark
@@ -164,37 +75,7 @@ uv run dbreduce reduce \
   --output benchmark.min.sql --report benchmark.report.json
 ```
 
-Full reduction is intentionally manual: snapshot restoration can be slow and
-requires disk proportional to the fixture. Never load this fixture into an existing
-application database. The loader deliberately fails on existing table names.
-
-Record server/client/Python versions, OS, CPU, RAM, storage, whether PostgreSQL is
-local, and the repository revision. Keep the entire report. Compare identical
-hardware, fixture, oracle, confirmation count and PostgreSQL settings. Repeat each
-run at least three times and report all times or a median and range; use distinct
-output filenames for each run. Cache is local to a run.
-
-Metrics in `benchmark.report.json`:
-
-- `initial_rows`, `final_rows`.
-- `oracle_executions`, `oracle_stats.outcomes`.
-- `candidate_stats.created`, `accepted`, `rejected`, and `cache_hits`.
-- `performance.elapsed_seconds`, `performance.oracle_seconds`.
-- `failure_identity.expected_signature`, `final_signature`, `preserved`.
-
-Restore the exported SQL with the guide's instructions, then run the same structured
-oracle using the restored database URL. It must return the same explicit signature.
-The expected relational reproducer is five rows; record the actual result rather
-than assuming this count. Inspect remaining rows and check that further single-row
-relationship-closed deletions cannot preserve the same failure.
-
-## Comparison policy
-
-No clone speedup was measured for v0.2. Historical demo numbers are not included
-as v0.2 measurements.
-
-To measure v0.1 against v0.2 in separate installations, use the same exit-based
-oracle with an explicit message and legacy CLI options for both, and independently
-verify the output identity. The v0.1 CLI cannot consume `--oracle-json`; directly
-comparing it with the updated demo would count a zero-exit structured verdict as
-success and invalidate the benchmark.
+Record the hardware, PostgreSQL server and client versions, oracle, confirmation
+count, and revision. Repeat each variant three times. Confirm the exported SQL
+with a fresh restore and the same oracle. The report contains phase counts,
+totals, and per-execution averages under `performance.phases`.

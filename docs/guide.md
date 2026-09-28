@@ -248,8 +248,8 @@ uv run dbreduce reduce \
 ```
 
 The report shows actual initial/final rows, expected/final signature digests,
-identity preservation and elapsed time. See [benchmark](benchmark.md) for a
-120,005-row version and real-world v0.2 validation measurements.
+identity preservation and elapsed time. See [benchmark](benchmark.md) for the
+120,005-row demo and the v0.3 real-world backend comparison.
 
 ## Virtual relationships
 
