@@ -1,4 +1,4 @@
-# <img src="docs/dbreduce-icon.svg" width="36" height="36" alt=""> DBReduce
+# <img src="docs/dbreduce-icon.svg" width="44" height="44" alt=""> DBReduce
 
 **Give DBReduce a PostgreSQL database and a failing test. It finds a smaller
 relational dataset that still reproduces the same bug.**
