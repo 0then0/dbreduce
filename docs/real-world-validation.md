@@ -4,7 +4,7 @@ This page records the original v0.2.0 validation. Current v0.3 measurements are
 in the [benchmark](benchmark.md); application details are in the
 [Wagtail](cases/wagtail-9208.md) and [NetBox](cases/netbox-17498.md) case notes.
 
-The development v0.4 opt-in schema run on the recreated Wagtail 8.0 source
+The v0.4.0 opt-in schema run on the recreated Wagtail 8.0 source
 reduced 150,706 rows and 48 tables to 3 rows and 1 table. It preserved the
 failure identity after a fresh logical restore and after a separate `psql`
 restore of the published SQL. Counts and timings are in the

@@ -7,7 +7,7 @@ the same plain dump format. `performance.phases.schema_reduction` measures the
 added schema phase; nested planning, restore, and oracle timings must not be
 summed with it. The v0.3 measurements below use data-only mode.
 
-## v0.4 opt-in schema runs
+## v0.4.0 opt-in schema runs
 
 On 2026-09-28, complete clone-backend runs with `--reduce-schema` and two
 structured-oracle confirmations were performed on PostgreSQL 17.11. Both
@@ -24,7 +24,7 @@ claim local irreducibility. The Wagtail run did. These are individual
 end-to-end measurements, not repeated performance comparisons. The Wagtail
 and NetBox cases describe the datasets and oracle limits.
 
-The v0.4 data-only control on the same Wagtail source, with the clone backend,
+The v0.4.0 data-only control on the same Wagtail source, with the clone backend,
 `--confirm 2`, and no concurrent integration tests, took 55.229s. It retained
 48 tables, reduced 150,706 rows to 3, and used 36 oracle executions. The v0.3
 clone median below was 59.610s. One v0.4 run establishes functional parity;

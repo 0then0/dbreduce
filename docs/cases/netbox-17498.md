@@ -1,6 +1,6 @@
 # NetBox issue #17498
 
-## Opt-in schema validation (development v0.4)
+## Opt-in schema validation (v0.4.0)
 
 On 2026-09-28, the public NetBox 4.1 demo SQL was restored again, and the
 duplicate-manufacturer issue condition was added with NetBox v4.1.1. The real

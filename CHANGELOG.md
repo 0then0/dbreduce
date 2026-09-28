@@ -2,7 +2,7 @@
 
 Notable user-facing changes.
 
-## [0.4.0] - Unreleased
+## [0.4.0] - 2026-09-28
 
 - Add opt-in `--reduce-schema` after row reduction. Whole application tables and
   their automatic restore dependencies are removed only after a clean candidate

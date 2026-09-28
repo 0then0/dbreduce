@@ -79,7 +79,7 @@ overwrites existing files.
 
 ## Real-world validation
 
-The opt-in v0.4 schema phase was validated with real Wagtail and NetBox
+The opt-in v0.4.0 schema phase was validated with real Wagtail and NetBox
 application oracles on PostgreSQL 17. Wagtail used generated application noise;
 NetBox used the public 4.1 demo dataset with the issue condition added:
 

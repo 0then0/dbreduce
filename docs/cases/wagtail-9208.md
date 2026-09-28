@@ -1,6 +1,6 @@
 # Wagtail issue #9208
 
-## Opt-in schema validation (development v0.4)
+## Opt-in schema validation (v0.4.0)
 
 On 2026-09-28, the source was recreated using Wagtail 8.0 migrations and the
 documented 150,000-row noise generator. The real Collection oracle reproduced
