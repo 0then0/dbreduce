@@ -1,18 +1,18 @@
 # Benchmark
 
-## v0.4.0 and unreleased version comparison
+## v0.4.0 and v0.4.1 comparison
 
-On 2026-09-29, published v0.4.0 and the unreleased compatibility version ran sequentially
+On 2026-09-29, published v0.4.0 and the source version prepared for v0.4.1 ran sequentially
 against the same Wagtail 8.0 / Django 6.1.1 source and oracle on PostgreSQL 17.11,
 using native matching clients, Python 3.13.15, clone `WAL_LOG`, and `--confirm 2`.
 No integration suite or other reduction ran concurrently with this pair.
-Published v0.4.0 took 55.866 seconds; the unreleased version took 57.231 seconds (+2.4%).
+Published v0.4.0 took 55.866 seconds; the v0.4.1 source version took 57.231 seconds (+2.4%).
 Both reduced 150,706 rows to three with 36 oracle executions, the same identity,
 54 successful clones, and 63 created/63 dropped databases without cleanup errors.
 This single pair finds no obvious performance regression; it is not a repeated
 benchmark or a performance improvement claim. An earlier pair under concurrent
 integration/schema load took 77.929/90.051 seconds and was not used to compare
-performance. Separate fresh restoration of the unreleased version's SQL passed the oracle.
+performance. Separate fresh restoration of the v0.4.1 source version's SQL passed the oracle.
 
 ## Reading the measurements
 

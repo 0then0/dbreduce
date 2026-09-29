@@ -50,7 +50,7 @@ def test_cleanup_targets_only_generated_database():
         "SELECT pg_advisory_lock(%s)",
         f'CREATE DATABASE "{name}" TEMPLATE template0',
         "SELECT oid, datdba FROM pg_database WHERE datname = %s",
-        f'COMMENT ON DATABASE "{name}" IS \'{workspace.marker}\'',
+        f"COMMENT ON DATABASE \"{name}\" IS '{workspace.marker}'",
         "SET statement_timeout = '600s'",
         "SELECT pg_advisory_lock(%s)",
         "SELECT oid, datdba, shobj_description(oid, 'pg_database') "
@@ -236,8 +236,10 @@ def test_schema_restore_infrastructure_error_aborts_candidate(tmp_path):
     )
     with pytest.raises(ClientError):
         reducer._attempt(
-            tmp_path / "plan.dump", b"1; 1 1 TABLE public example postgres\n",
-            {("public", "example"): {1}}, {("public", "example")},
+            tmp_path / "plan.dump",
+            b"1; 1 1 TABLE public example postgres\n",
+            {("public", "example"): {1}},
+            {("public", "example")},
         )
     assert reducer.outcomes["oracle_infrastructure_error"] == 1
     assert reducer.outcomes["invalid_schema"] == 0

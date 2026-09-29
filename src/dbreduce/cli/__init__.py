@@ -85,9 +85,12 @@ def inspect_command(
             conn.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY")
             schema = load_relationships(conn, inspect_database(conn), config)
             schema_counts = inspect_schema_counts(conn)
-        typer.echo("Schema: " + ", ".join(
-            f"{name.replace('_', ' ')}: {count}" for name, count in schema_counts.items()
-        ))
+        typer.echo(
+            "Schema: "
+            + ", ".join(
+                f"{name.replace('_', ' ')}: {count}" for name, count in schema_counts.items()
+            )
+        )
         for table in schema.tables:
             typer.echo(
                 f"{table.label}\n  rows: {table.rows}\n  pk: {', '.join(table.primary_key) or '-'}"
@@ -227,9 +230,7 @@ def reduce_command(
                         dump(workspace.dsn, initial_sql, archive=False, create_database=True)
                     initial_sql_bytes = initial_sql.stat().st_size
                     with psycopg.connect(workspace.dsn, connect_timeout=10) as conn:
-                        initial_schema_counts = schema_counts(
-                            conn, archive_objects(snapshot)[1]
-                        )
+                        initial_schema_counts = schema_counts(conn, archive_objects(snapshot)[1])
                 initial_rows = sum(table.rows for table in schema.tables)
                 typer.echo(f"Initial database: {len(schema.tables)} tables, {initial_rows} rows")
                 cache = Cache()
@@ -245,7 +246,9 @@ def reduce_command(
                     if candidate_backend == "clone":
                         store = candidate_resources.enter_context(
                             CloneStore(
-                                admin, settings, performance,
+                                admin,
+                                settings,
+                                performance,
                                 strategy=clone_strategy,
                                 file_copy_method=file_copy_method,
                                 restore_jobs=restore_jobs,
@@ -254,7 +257,12 @@ def reduce_command(
                         store.probe_file_copy_clone()
                         accepted_db, initial_state = store.create_initial(snapshot, schema)
                         clone_backend = CloneBackend(
-                            store, schema, accepted_db, initial_state, runner, performance,
+                            store,
+                            schema,
+                            accepted_db,
+                            initial_state,
+                            runner,
+                            performance,
                             typer.echo,
                         )
                         if not clone_backend.confirm_initial_state():
@@ -295,7 +303,11 @@ def reduce_command(
                             workspace.reset(final_archive)
                             dump(workspace.dsn, schema_archive)
                         schema_reducer = SchemaReducer(
-                            workspace, schema_archive, runner, performance, typer.echo,
+                            workspace,
+                            schema_archive,
+                            runner,
+                            performance,
+                            typer.echo,
                             initial_schema_counts,
                         )
                         with performance.measure("schema_reduction"):
@@ -307,12 +319,9 @@ def reduce_command(
                             workspace.reset(normalized_archive)
                         final_archive = normalized_archive
                     # A fresh uncached final confirmation catches flaky-oracle failures.
-                    if not runner.fails(
-                        workspace.url, lambda: workspace.reset(final_archive)
-                    ):
+                    if not runner.fails(workspace.url, lambda: workspace.reset(final_archive)):
                         raise ValueError(
-                            "Final oracle identity confirmation failed; "
-                            "no verified result exported"
+                            "Final oracle identity confirmation failed; no verified result exported"
                         )
                     with performance.measure("final_normalization"):
                         workspace.reset(final_archive)
@@ -367,7 +376,8 @@ def reduce_command(
                                 + performance.phases["oracle_process"][1]
                             )
                             / runner.executions
-                            if runner.executions else 0
+                            if runner.executions
+                            else 0
                         ),
                     },
                     "relationships": {

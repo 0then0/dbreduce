@@ -77,7 +77,9 @@ class PostgresBackend:
         fingerprint_dump = self.snapshot.with_name("fingerprint.sql")
         with self.performance.measure("fingerprint_dump"):
             dump(
-                self.workspace.dsn, fingerprint_dump, archive=False,
+                self.workspace.dsn,
+                fingerprint_dump,
+                archive=False,
                 restrict_key=self.restrict_key,
             )
         with self.performance.measure("fingerprint_hash"):

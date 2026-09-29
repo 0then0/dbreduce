@@ -2,9 +2,9 @@
 
 Notable user-facing changes.
 
-## [Unreleased]
+## [0.4.1] - 2026-09-29
 
-- Lower the source package's Python minimum to 3.10 after interpreter, type, lint,
+- Lower the package's Python minimum to 3.10 after interpreter, type, lint,
   wheel and standalone installation checks on Python 3.10–3.14.
 - Test PostgreSQL 15–18 with matching native clients; allow both clone strategies
   from PostgreSQL 15 while keeping `file_copy_method` exclusive to PostgreSQL 18.

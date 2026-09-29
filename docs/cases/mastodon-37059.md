@@ -12,7 +12,7 @@
 - Fix: [PR #37079](https://github.com/mastodon/mastodon/pull/37079), merge commit
   `e5651e7e048f644cc521b067186e738a6cfade16`.
 - PostgreSQL server and native clients: 17.11; Redis 7 for normal Rails boot.
-- DBReduce: unreleased compatibility version based on v0.4.0, Python 3.10.21,
+- DBReduce: source version prepared for v0.4.1, Python 3.10.21,
   Linux arm64.
 - Validation date: 2026-09-29.
 

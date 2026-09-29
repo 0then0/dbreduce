@@ -44,13 +44,10 @@ def check_clone_source(conn: psycopg.Connection[tuple[Any, ...]]) -> None:
             row = conn.execute(query).fetchone()
             assert row is not None
             if row[0]:
-                raise ValueError(
-                    f"Clone backend does not support {label}; use snapshot backend"
-                )
+                raise ValueError(f"Clone backend does not support {label}; use snapshot backend")
     except psycopg.Error as error:
         raise ValueError(
-            "Cannot verify replication and prepared-transaction preflight; "
-            "use snapshot backend"
+            "Cannot verify replication and prepared-transaction preflight; use snapshot backend"
         ) from error
 
 
@@ -103,8 +100,7 @@ class CloneStore:
 
     def probe_file_copy_clone(self) -> None:
         if self.strategy != "file_copy" or (
-            self.requested_file_copy_method != "clone"
-            and self.server_file_copy_method != "clone"
+            self.requested_file_copy_method != "clone" and self.server_file_copy_method != "clone"
         ):
             return
         probe = None
@@ -203,9 +199,7 @@ class CloneStore:
             raise
 
     def create_initial(self, snapshot: Path, schema: Schema) -> tuple[OwnedDatabase, State]:
-        database = self._create(
-            lambda name: initial_database_statement(name, self.settings)
-        )
+        database = self._create(lambda name: initial_database_statement(name, self.settings))
         with self.performance.measure("restore"):
             restore(self.dsn(database), snapshot, jobs=self.restore_jobs)
         with psycopg.connect(self.dsn(database), connect_timeout=10) as conn:
@@ -230,9 +224,7 @@ class CloneStore:
                 f"Could not verify ownership of database {database.name}; "
                 "inspect it manually before removal"
             ) from error
-        if row is None or (row[0], row[1], row[2]) != (
-            database.oid, database.owner, self.marker
-        ):
+        if row is None or (row[0], row[1], row[2]) != (database.oid, database.owner, self.marker):
             raise RuntimeError(
                 f"Ownership of database {database.name} cannot be verified; "
                 "inspect it manually before removal"
@@ -300,9 +292,7 @@ class CloneStore:
             with self._admin() as conn:
                 conn.execute("SET statement_timeout = '600s'")
                 with self.performance.measure("database_cleanup"):
-                    conn.execute(
-                        sql.SQL("DROP DATABASE {}").format(sql.Identifier(database.name))
-                    )
+                    conn.execute(sql.SQL("DROP DATABASE {}").format(sql.Identifier(database.name)))
         except RuntimeError:
             self.cleanup_failures += 1
             raise
@@ -326,9 +316,7 @@ class CloneStore:
                     f"{str(error) or type(error).__name__}; inspect it before manual removal"
                 )
         if self.unproven:
-            failures.append(
-                "Unverified creation outcome for: " + ", ".join(sorted(self.unproven))
-            )
+            failures.append("Unverified creation outcome for: " + ", ".join(sorted(self.unproven)))
         if failures:
             raise RuntimeError("; ".join(failures))
 

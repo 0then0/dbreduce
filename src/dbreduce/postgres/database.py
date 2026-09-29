@@ -227,9 +227,7 @@ class Workspace:
             # SQLSTATE proves PostgreSQL rejected the statement. A transport failure does not.
             if getattr(error, "sqlstate", None) is not None:
                 try:
-                    with psycopg.connect(
-                        self.admin_dsn, connect_timeout=10
-                    ) as conn:
+                    with psycopg.connect(self.admin_dsn, connect_timeout=10) as conn:
                         row = conn.execute(
                             "SELECT EXISTS (SELECT 1 FROM pg_database WHERE datname = %s)",
                             (self.name,),
@@ -262,7 +260,9 @@ class Workspace:
                         (self.name,),
                     ).fetchone()
                     if row is None or (row[0], row[1], row[2]) != (
-                        self.oid, self.owner, self.marker
+                        self.oid,
+                        self.owner,
+                        self.marker,
                     ):
                         raise RuntimeError(
                             f"Ownership of workspace database {self.name} cannot be verified; "

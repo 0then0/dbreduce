@@ -128,7 +128,7 @@ def test_framed_json_ignores_application_logs_and_locks_identity():
     oracle = Oracle(
         command(
             "print('startup log'); "
-            "print('DBREDUCE_VERDICT {\"reproduced\":true,\"signature\":\"BUG_A\"}'); "
+            'print(\'DBREDUCE_VERDICT {"reproduced":true,"signature":"BUG_A"}\'); '
             "print('shutdown log')"
         ),
         framed=True,
@@ -136,7 +136,7 @@ def test_framed_json_ignores_application_logs_and_locks_identity():
     assert oracle.fails("postgresql:///test", lambda: None)
     oracle.command = command(
         "print('startup log'); "
-        "print('DBREDUCE_VERDICT {\"reproduced\":true,\"signature\":\"BUG_B\"}')"
+        'print(\'DBREDUCE_VERDICT {"reproduced":true,"signature":"BUG_B"}\')'
     )
     assert not oracle.fails("postgresql:///test", lambda: None)
     assert oracle.last_outcome == "different_failure"
@@ -149,8 +149,10 @@ def test_framed_json_ignores_application_logs_and_locks_identity():
     [
         ["ordinary log"],
         ["DBREDUCE_VERDICT garbage"],
-        ["DBREDUCE_VERDICT {\"reproduced\":true,\"signature\":\"A\"}",
-         "DBREDUCE_VERDICT {\"reproduced\":true,\"signature\":\"A\"}"],
+        [
+            'DBREDUCE_VERDICT {"reproduced":true,"signature":"A"}',
+            'DBREDUCE_VERDICT {"reproduced":true,"signature":"A"}',
+        ],
     ],
 )
 def test_framed_json_requires_one_valid_verdict(lines):
@@ -162,7 +164,7 @@ def test_framed_json_requires_one_valid_verdict(lines):
 
 def test_strict_json_still_rejects_noisy_stdout():
     oracle = Oracle(
-        command("print('log'); print('{\"reproduced\":true,\"signature\":\"A\"}')"),
+        command('print(\'log\'); print(\'{"reproduced":true,"signature":"A"}\')'),
         structured=True,
     )
     with pytest.raises(OracleError, match="Invalid structured oracle JSON"):

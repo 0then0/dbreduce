@@ -20,12 +20,30 @@ from dbreduce.postgres.dump import ClientError, dump
 from dbreduce.postgres.introspection import inspect_schema_counts
 from dbreduce.reducer.ddmin import chunks, sizes
 
-_KINDS = tuple(kind.encode("ascii") for kind in (
-    "MATERIALIZED VIEW DATA", "SEQUENCE OWNED BY", "FK CONSTRAINT",
-    "TABLE DATA", "SEQUENCE SET", "MATERIALIZED VIEW", "PROCEDURE",
-    "FUNCTION", "CONSTRAINT", "EXTENSION", "TRIGGER", "DEFAULT", "COMMENT",
-    "SEQUENCE", "SCHEMA", "INDEX", "VIEW", "TYPE", "TABLE",
-))
+_KINDS = tuple(
+    kind.encode("ascii")
+    for kind in (
+        "MATERIALIZED VIEW DATA",
+        "SEQUENCE OWNED BY",
+        "FK CONSTRAINT",
+        "TABLE DATA",
+        "SEQUENCE SET",
+        "MATERIALIZED VIEW",
+        "PROCEDURE",
+        "FUNCTION",
+        "CONSTRAINT",
+        "EXTENSION",
+        "TRIGGER",
+        "DEFAULT",
+        "COMMENT",
+        "SEQUENCE",
+        "SCHEMA",
+        "INDEX",
+        "VIEW",
+        "TYPE",
+        "TABLE",
+    )
+)
 _TOC = re.compile(rb"^(\d+); (\d+) (\d+) (.+)$")
 
 
@@ -69,8 +87,11 @@ class SchemaObject:
 def archive_objects(path: Path) -> tuple[bytes, list[SchemaObject]]:
     try:
         result = subprocess.run(
-            ["pg_restore", "--list", str(path)], capture_output=True,
-            timeout=600, env={**os.environ, "LC_ALL": "C"}, check=False,
+            ["pg_restore", "--list", str(path)],
+            capture_output=True,
+            timeout=600,
+            env={**os.environ, "LC_ALL": "C"},
+            check=False,
         )
     except subprocess.TimeoutExpired as error:
         raise RuntimeError("Timed out reading archive object list") from error
@@ -82,24 +103,36 @@ def archive_objects(path: Path) -> tuple[bytes, list[SchemaObject]]:
         if match is None:
             continue
         detail = match[4]
-        raw_kind = next(
-            (kind for kind in _KINDS if detail.startswith(kind + b" ")), b""
-        )
+        raw_kind = next((kind for kind in _KINDS if detail.startswith(kind + b" ")), b"")
         kind = raw_kind.decode("ascii") if raw_kind else "OTHER"
-        objects.append(SchemaObject(
-            int(match[1]), int(match[2]), int(match[3]), kind,
-            detail[len(raw_kind) + 1:] if raw_kind else detail, line,
-        ))
+        objects.append(
+            SchemaObject(
+                int(match[1]),
+                int(match[2]),
+                int(match[3]),
+                kind,
+                detail[len(raw_kind) + 1 :] if raw_kind else detail,
+                line,
+            )
+        )
     return result.stdout, objects
 
 
 def object_counts(objects: list[SchemaObject]) -> dict[str, int]:
     names = {
-        "TABLE": "tables", "INDEX": "indexes", "CONSTRAINT": "constraints",
-        "FK CONSTRAINT": "constraints", "VIEW": "views",
-        "MATERIALIZED VIEW": "materialized_views", "FUNCTION": "functions",
-        "PROCEDURE": "procedures", "TRIGGER": "triggers", "SEQUENCE": "sequences",
-        "TYPE": "types", "EXTENSION": "extensions", "SCHEMA": "schemas",
+        "TABLE": "tables",
+        "INDEX": "indexes",
+        "CONSTRAINT": "constraints",
+        "FK CONSTRAINT": "constraints",
+        "VIEW": "views",
+        "MATERIALIZED VIEW": "materialized_views",
+        "FUNCTION": "functions",
+        "PROCEDURE": "procedures",
+        "TRIGGER": "triggers",
+        "SEQUENCE": "sequences",
+        "TYPE": "types",
+        "EXTENSION": "extensions",
+        "SCHEMA": "schemas",
     }
     counts = dict.fromkeys(names.values(), 0)
     for obj in objects:
@@ -107,8 +140,7 @@ def object_counts(objects: list[SchemaObject]) -> dict[str, int]:
         if name is not None:
             counts[name] += 1
     counts["schema_objects"] = sum(
-        obj.kind not in ("TABLE DATA", "SEQUENCE SET", "MATERIALIZED VIEW DATA")
-        for obj in objects
+        obj.kind not in ("TABLE DATA", "SEQUENCE SET", "MATERIALIZED VIEW DATA") for obj in objects
     )
     return counts
 
@@ -127,6 +159,7 @@ def table_oids(conn: psycopg.Connection[Any]) -> dict[TableKey, tuple[int, int]]
           AND n.nspname !~ '^pg_'
         ORDER BY n.nspname, c.relname
     """).fetchall()
+
     def count(schema: str, name: str) -> int:
         row = conn.execute(
             sql.SQL("SELECT count(*) FROM {}").format(sql.Identifier(schema, name))
@@ -144,7 +177,9 @@ def table_oids(conn: psycopg.Connection[Any]) -> dict[TableKey, tuple[int, int]]
 
 
 def removal_ids(
-    conn: psycopg.Connection[Any], objects: list[SchemaObject], removed_tables: set[TableKey],
+    conn: psycopg.Connection[Any],
+    objects: list[SchemaObject],
+    removed_tables: set[TableKey],
     tables: dict[TableKey, tuple[int, int]],
 ) -> set[int]:
     """Close automatic/internal dependencies and FKs pointing at removed tables."""
@@ -173,7 +208,8 @@ def removal_ids(
                 removed.add(dependent)
                 pending.append(dependent)
     excluded = {
-        obj.dump_id for obj in objects
+        obj.dump_id
+        for obj in objects
         if (obj.catalog_oid, obj.object_oid) in removed
         or (obj.catalog_oid == 0 and (class_oid, obj.object_oid) in removed)
     }
@@ -185,7 +221,8 @@ def removal_ids(
         if len(fields) >= 2
     }
     excluded.update(
-        obj.dump_id for obj in objects
+        obj.dump_id
+        for obj in objects
         if obj.kind == "COMMENT"
         and (fields := _toc_fields(obj.identity))
         and len(fields) >= 3
@@ -197,13 +234,12 @@ def removal_ids(
         )
     )
     removed_sequences = {
-        obj.identity for obj in objects
-        if obj.kind == "SEQUENCE" and obj.dump_id in excluded
+        obj.identity for obj in objects if obj.kind == "SEQUENCE" and obj.dump_id in excluded
     }
     excluded.update(
-        obj.dump_id for obj in objects
-        if obj.kind in ("SEQUENCE SET", "SEQUENCE OWNED BY")
-        and obj.identity in removed_sequences
+        obj.dump_id
+        for obj in objects
+        if obj.kind in ("SEQUENCE SET", "SEQUENCE OWNED BY") and obj.identity in removed_sequences
     )
     return excluded
 
@@ -218,8 +254,12 @@ def selected_list(toc: bytes, excluded: set[int], path: Path) -> None:
 
 class SchemaReducer:
     def __init__(
-        self, workspace: Workspace, archive: Path, oracle: Oracle,
-        performance: Performance, progress: Callable[[str], None],
+        self,
+        workspace: Workspace,
+        archive: Path,
+        oracle: Oracle,
+        performance: Performance,
+        progress: Callable[[str], None],
         initial: dict[str, int] | None = None,
     ) -> None:
         self.workspace = workspace
@@ -261,7 +301,10 @@ class SchemaReducer:
                 return self.archive
 
     def _attempt(
-        self, plan_archive: Path, toc: bytes, ids_by_table: dict[TableKey, set[int]],
+        self,
+        plan_archive: Path,
+        toc: bytes,
+        ids_by_table: dict[TableKey, set[int]],
         removed_tables: set[TableKey],
     ) -> bool:
         self.attempted += 1
@@ -278,18 +321,22 @@ class SchemaReducer:
                 self.workspace.reset(plan_archive, use_list=selected)
         except ClientError as error:
             if error.command != "pg_restore" or error.reason not in (
-                "constraint violation", "missing dependency", "invalid schema",
+                "constraint violation",
+                "missing dependency",
+                "invalid schema",
             ):
                 self.outcomes["oracle_infrastructure_error"] += 1
                 raise
             self.outcomes[
-                "constraint_rejected" if error.reason == "constraint violation"
+                "constraint_rejected"
+                if error.reason == "constraint violation"
                 else "invalid_schema"
             ] += 1
             return False
         with psycopg.connect(self.workspace.dsn, connect_timeout=10) as conn:
             actual_tables = {
-                (schema, name) for schema, name in conn.execute("""
+                (schema, name)
+                for schema, name in conn.execute("""
                     SELECT n.nspname, c.relname FROM pg_class c
                     JOIN pg_namespace n ON n.oid = c.relnamespace
                     WHERE c.relkind = 'r' AND n.nspname <> 'information_schema'
@@ -307,24 +354,26 @@ class SchemaReducer:
                 self.workspace.reset(candidate)
         except ClientError as error:
             if error.command != "pg_restore" or error.reason not in (
-                "constraint violation", "missing dependency", "invalid schema",
+                "constraint violation",
+                "missing dependency",
+                "invalid schema",
             ):
                 self.outcomes["oracle_infrastructure_error"] += 1
                 raise
             self.outcomes[
-                "constraint_rejected" if error.reason == "constraint violation"
+                "constraint_rejected"
+                if error.reason == "constraint violation"
                 else "invalid_schema"
             ] += 1
             return False
         try:
+
             def prepare_oracle() -> None:
                 with self.performance.measure("schema_oracle_preparation"):
                     self.workspace.reset(candidate)
 
             with self.performance.measure("schema_oracle_execution"):
-                accepted = self.oracle.fails(
-                    self.workspace.url, prepare_oracle
-                )
+                accepted = self.oracle.fails(self.workspace.url, prepare_oracle)
         except OracleError:
             self.outcomes["oracle_infrastructure_error"] += 1
             return False
@@ -346,16 +395,28 @@ class SchemaReducer:
             "enabled": True,
             "initial": self.initial,
             "final": final,
-            "candidates": {"attempted": self.attempted, "accepted": self.accepted,
-                           "rejected": self.attempted - self.accepted,
-                           **{key: self.outcomes[key] for key in (
-                               "bug_disappeared", "different_failure", "invalid_schema",
-                               "constraint_rejected", "oracle_infrastructure_error",
-                           )}},
+            "candidates": {
+                "attempted": self.attempted,
+                "accepted": self.accepted,
+                "rejected": self.attempted - self.accepted,
+                **{
+                    key: self.outcomes[key]
+                    for key in (
+                        "bug_disappeared",
+                        "different_failure",
+                        "invalid_schema",
+                        "constraint_rejected",
+                        "oracle_infrastructure_error",
+                    )
+                },
+            },
             "minimality": {
                 "locally_irreducible": not any(
-                    self.outcomes[key] for key in (
-                        "invalid_schema", "constraint_rejected", "oracle_infrastructure_error",
+                    self.outcomes[key]
+                    for key in (
+                        "invalid_schema",
+                        "constraint_rejected",
+                        "oracle_infrastructure_error",
                     )
                 ),
                 "transformations": ["whole_table_removal"],

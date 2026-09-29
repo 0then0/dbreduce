@@ -13,9 +13,8 @@ python -m pip install dbreduce
 dbreduce --help
 ```
 
-The unreleased source requires Python 3.10 or newer and is tested on Python 3.10–3.14.
-Published v0.4.0 requires Python 3.13 or newer. The expanded compatibility range
-is not yet available on PyPI. The tested PostgreSQL range is 15–18, separately verified
+DBReduce v0.4.1 requires Python 3.10 or newer and is tested on Python 3.10–3.14.
+The tested PostgreSQL range is 15–18, separately verified
 for snapshot, clone, schema reduction and final logical restore.
 See [the compatibility decision record](compatibility.md).
 

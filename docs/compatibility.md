@@ -1,13 +1,12 @@
 # Compatibility
 
 This page describes supported versions, the reasons for their requirements, and
-the checks performed on 2026-09-29. The Python 3.10 and PostgreSQL 15–18
-compatibility changes are currently unreleased. The published v0.4.0 package
-requires Python 3.13 or newer.
+the checks performed on 2026-09-29 for DBReduce v0.4.1. This maintenance release
+expands Python and PostgreSQL compatibility without adding reducer primitives.
 
 ## Python
 
-The unreleased source requires **Python 3.10 or newer**. Each version below passed
+DBReduce v0.4.1 requires **Python 3.10 or newer**. Each version below passed
 73 non-PostgreSQL tests, mypy, Ruff and `dbreduce --help` using the listed interpreter:
 
 | Python | Interpreter | Unit/type/lint/CLI | Wheel build/tool install/uvx |
@@ -19,7 +18,8 @@ The unreleased source requires **Python 3.10 or newer**. Each version below pass
 | 3.14   | 3.14.7      | PASS               | PASS                         |
 
 The local checks used macOS arm64; PostgreSQL tests additionally used Linux
-arm64. The configured CI matrix covers Python 3.10–3.14 on Ubuntu. The wheel declares
+arm64. The [GitHub Actions matrix](https://github.com/0then0/dbreduce/actions/runs/36627834096)
+passed Python 3.10–3.14 and PostgreSQL 15–18 on Ubuntu before release. The wheel declares
 `Requires-Python: >=3.10`; a separate Python 3.10 environment successfully ran
 `python -m pip install <wheel>` and its installed CLI.
 
@@ -73,8 +73,8 @@ isolation, ownership verification, cleanup and final restore in the integration
 suite. All 45 PostgreSQL tests passed on each of the four server/client majors,
 with no skips. Source-preservation and schema-candidate tests also pass.
 
-Published v0.4.0 restricts clone mode to PostgreSQL 17 or newer. The unreleased
-version supports clone mode from PostgreSQL 15, where explicit copy strategies
+DBReduce v0.4.0 restricted clone mode to PostgreSQL 17 or newer. Version 0.4.1
+supports clone mode from PostgreSQL 15, where explicit copy strategies
 are available. Both strategies passed lifecycle tests on PG15 and PG16.
 Servers older than PG15 receive a version error before clone creation.
 `--file-copy-method` still requires PostgreSQL 18; explicit `copy` requests were

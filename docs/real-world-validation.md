@@ -2,7 +2,7 @@
 
 ## Ruby/Rails validation and regression checks
 
-On 2026-09-29, the unreleased compatibility version validated
+On 2026-09-29, the source version prepared for v0.4.1 validated
 [Mastodon #37059](cases/mastodon-37059.md) with the actual Ruby/Rails migration in
 official v4.5.2 and v4.5.3 images, PostgreSQL/native clients 17.11 and framed JSON.
 Data reduction changed 1,757 rows to two; subsequent schema reduction changed
@@ -14,12 +14,12 @@ local irreducibility is not claimed. This repeats the NetBox candidate/verdict
 limitation; see [the adoption evidence](adoption.md).
 
 Wagtail data-only reduction was rerun against the same 150,706-row source:
-published v0.4.0 and the unreleased version each reached three rows with
+published v0.4.0 and the v0.4.1 source version each reached three rows with
 36 oracle executions and preserved failure identity. A separate restore of the
-unreleased version's exported SQL passed the Wagtail oracle. The v0.4 NetBox
+v0.4.1 source version's exported SQL passed the Wagtail oracle. The v0.4 NetBox
 four-table/two-row SQL was separately restored with native PG17 clients and
 passed the actual NetBox v4.1.1 form oracle. NetBox's full reduction was not
-repeated. The [performance comparison](benchmark.md#v040-and-unreleased-version-comparison)
+repeated. The [performance comparison](benchmark.md#v040-and-v041-comparison)
 records the sequential Wagtail comparison.
 
 ## Earlier validation

@@ -104,8 +104,12 @@ def restore(dsn: str, path: Path, *, jobs: int = 1, use_list: Path | None = None
         raise ValueError("restore jobs must be positive")
     client(
         [
-            "pg_restore", "--exit-on-error", "--no-owner", "--no-privileges",
-            "--jobs", str(jobs),
+            "pg_restore",
+            "--exit-on-error",
+            "--no-owner",
+            "--no-privileges",
+            "--jobs",
+            str(jobs),
             *(["--use-list", str(use_list)] if use_list is not None else []),
             str(path),
         ],

@@ -108,8 +108,11 @@ class Oracle:
             if code != 0:
                 raise OracleError("Structured oracle must exit zero with a verdict")
             if self.mode == "framed_json":
-                lines = [line[len(VERDICT_PREFIX):] for line in stdout.splitlines()
-                         if line.startswith(VERDICT_PREFIX)]
+                lines = [
+                    line[len(VERDICT_PREFIX) :]
+                    for line in stdout.splitlines()
+                    if line.startswith(VERDICT_PREFIX)
+                ]
                 if len(lines) != 1:
                     raise OracleError("Framed oracle requires exactly one verdict line")
                 stdout = lines[0]

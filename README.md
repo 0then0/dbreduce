@@ -23,10 +23,9 @@ and explicitly configured application relationships.
 
 ## Quick start
 
-The unreleased source supports Python 3.10–3.14 and PostgreSQL 15–18. Use current patched,
+DBReduce v0.4.1 supports Python 3.10–3.14 and PostgreSQL 15–18. Use current patched,
 matching-major `pg_dump`, `pg_restore` and `psql` tools; see the
-[compatibility report](docs/compatibility.md). Published v0.4.0 requires Python
-3.13 or newer; the expanded compatibility range is not yet available on PyPI.
+[compatibility report](docs/compatibility.md).
 
 Install DBReduce as a standalone developer tool:
 
