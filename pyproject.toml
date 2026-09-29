@@ -7,7 +7,7 @@ name = "dbreduce"
 version = "0.4.0"
 description = "Reduce PostgreSQL bug reproducers using delta debugging"
 readme = "README.md"
-requires-python = ">=3.13"
+requires-python = ">=3.10"
 license = "Apache-2.0"
 dependencies = ["psycopg[binary]>=3.2,<4", "typer>=0.16,<1"]
 
@@ -24,14 +24,14 @@ dbreduce = "dbreduce.cli:app"
 dev = ["pytest>=8,<10", "ruff>=0.12,<1", "mypy>=1.16,<2"]
 
 [tool.ruff]
-target-version = "py313"
+target-version = "py310"
 line-length = 100
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B"]
 
 [tool.mypy]
-python_version = "3.13"
+python_version = "3.10"
 strict = true
 
 [tool.pytest.ini_options]

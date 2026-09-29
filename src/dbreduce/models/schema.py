@@ -1,8 +1,8 @@
 from dataclasses import dataclass
 
-type TableKey = tuple[str, str]
-type RowKey = tuple[str, int]
-type State = dict[TableKey, list[RowKey]]
+TableKey = tuple[str, str]
+RowKey = tuple[str, int]
+State = dict[TableKey, list[RowKey]]
 
 
 @dataclass(frozen=True)

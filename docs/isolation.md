@@ -4,7 +4,7 @@ DBReduce provides two PostgreSQL candidate backends:
 
 - `snapshot` recreates candidates through custom-format dump and restore. It is
   the default and compatibility fallback.
-- `clone` uses PostgreSQL 17 or later database copies. It is experimental and
+- `clone` uses PostgreSQL 15 or later database copies. It is experimental and
   opt-in with `--candidate-backend clone`.
 
 ## Clone safety model

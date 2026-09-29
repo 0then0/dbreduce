@@ -1059,7 +1059,8 @@ def test_different_failure_rejected_with_oracle_writes(workspace, tmp_path):
         assert conn.execute("SELECT id FROM parent").fetchall() == [(7,)]
 
 
-def test_clone_rejects_different_failure_and_isolates_oracle_writes(workspace, tmp_path):
+@pytest.mark.parametrize("strategy", ["wal_log", "file_copy"])
+def test_clone_rejects_different_failure_and_isolates_oracle_writes(workspace, tmp_path, strategy):
     snapshot = tmp_path / "accepted.dump"
     dump(workspace.dsn, snapshot)
     with psycopg.connect(workspace.dsn) as conn:
@@ -1078,7 +1079,7 @@ def test_clone_rejects_different_failure_and_isolates_oracle_writes(workspace, t
     assert oracle.fails(workspace.url, lambda: workspace.reset(snapshot))
     admin = os.environ["DBREDUCE_TEST_ADMIN"]
     final_dump = tmp_path / "final.dump"
-    with CloneStore(admin, read_settings(workspace.dsn), Performance()) as store:
+    with CloneStore(admin, read_settings(workspace.dsn), Performance(), strategy=strategy) as store:
         accepted, accepted_state = store.create_initial(snapshot, schema)
         backend = CloneBackend(store, schema, accepted, accepted_state, oracle, Performance())
         assert backend.confirm_initial_state()

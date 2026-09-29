@@ -14,12 +14,44 @@ permissions:
   contents: read
 
 jobs:
-  test:
+  python:
     runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       matrix:
-        pg: [17, 18]
+        python: ['3.10', '3.11', '3.12', '3.13', '3.14']
+    env:
+      UV_PYTHON: ${{ matrix.python }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref }}
+      - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+      - run: uv python install ${{ matrix.python }}
+      - run: uv run --locked ruff check .
+      - run: uv run --locked mypy src
+      - run: uv run --locked pytest -q -m 'not postgres'
+      - run: uv build --out-dir dist
+      - name: Check standalone wheel installation
+        run: |
+          uv tool install --python '${{ matrix.python }}' dist/*.whl
+          "$(uv tool dir --bin)/dbreduce" --help
+          uvx --isolated --python '${{ matrix.python }}' --from dist/*.whl dbreduce --help
+
+  postgres:
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - pg: 15
+            python: '3.10'
+          - pg: 16
+            python: '3.12'
+          - pg: 17
+            python: '3.13'
+          - pg: 18
+            python: '3.14'
     services:
       postgres:
         image: postgres:${{ matrix.pg }}
@@ -33,13 +65,14 @@ jobs:
           --health-timeout 5s
           --health-retries 5
     env:
+      UV_PYTHON: ${{ matrix.python }}
       DBREDUCE_TEST_ADMIN: postgresql://postgres@localhost:5432/postgres
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref }}
       - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
-      - run: uv python install 3.13
+      - run: uv python install ${{ matrix.python }}
       - name: Install matching native PostgreSQL client tools
         run: |
           sudo apt-get update
@@ -54,18 +87,22 @@ jobs:
           sudo apt-get install -y postgresql-client-${{ matrix.pg }}
           echo "/usr/lib/postgresql/${{ matrix.pg }}/bin" >> "$GITHUB_PATH"
       - name: Verify native client version
-        run: test "$(pg_dump --version | awk '{print $3}' | cut -d. -f1)" = '${{ matrix.pg }}'
+        run: |
+          for client in pg_dump pg_restore psql; do
+            "$client" --version
+            test "$("$client" --version | awk '{print $3}' | cut -d. -f1)" = '${{ matrix.pg }}'
+          done
+          test "$(psql "$DBREDUCE_TEST_ADMIN" -Atqc "SELECT current_setting('server_version_num')::int / 10000")" = '${{ matrix.pg }}'
+          pg_dump --help | grep -q -- --restrict-key
       - name: Verify privileged integration tests can run
         run: test "$(psql "$DBREDUCE_TEST_ADMIN" -Atqc "SELECT rolsuper FROM pg_roles WHERE rolname = current_user")" = t
-      - run: uv run --locked ruff check .
-      - run: uv run --locked mypy src
-      - run: uv run --locked pytest -q
+      - run: uv run --locked pytest -q -m postgres
 
   release:
     if: >-
       (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')) ||
       (github.event_name == 'workflow_dispatch' && startsWith(inputs.release_tag, 'v'))
-    needs: test
+    needs: [python, postgres]
     runs-on: ubuntu-24.04
     permissions:
       contents: write

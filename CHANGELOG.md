@@ -2,6 +2,18 @@
 
 Notable user-facing changes.
 
+## [Unreleased]
+
+- Lower the source package's Python minimum to 3.10 after interpreter, type, lint,
+  wheel and standalone installation checks on Python 3.10–3.14.
+- Test PostgreSQL 15–18 with matching native clients; allow both clone strategies
+  from PostgreSQL 15 while keeping `file_copy_method` exclusive to PostgreSQL 18.
+- Separate Python checks from PostgreSQL integration CI and gate releases on both.
+- Document standalone uv/pip installation, the client/server round-trip baseline,
+  compatibility decisions and external adoption reporting.
+- Validate Mastodon #37059 through a framed Ruby/Rails migration oracle, with
+  data/schema reduction, independent fresh restore and fixed-version control.
+
 ## [0.4.0] - 2026-09-28
 
 - Add opt-in `--reduce-schema` after row reduction. Whole application tables and

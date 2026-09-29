@@ -1,0 +1,42 @@
+# Usage reports and known adoption barriers
+
+The Wagtail, NetBox and Mastodon case studies demonstrate workflows tested by the
+project maintainers. As of 2026-09-29, no independent usage report has been
+verified. Maintainer case studies establish validation results, rather than
+external adoption.
+
+[Contribution guidance](../CONTRIBUTING.md) explains installation and how to
+report problems. [Issue #1](https://github.com/0then0/dbreduce/issues/1) collects
+standalone installation and non-Python oracle reports. Reports from users help
+identify which limitations affect applications beyond the published case studies.
+
+## Feedback classification
+
+Usage reports are grouped by installation, compatibility, oracle ergonomics,
+schema reduction, performance, documentation and unsupported PostgreSQL features.
+A useful report includes the tested versions, a link to the issue or reproducer,
+and whether the problem has been reproduced. See the contribution guidance for
+the complete reporting checklist.
+
+## Known barriers
+
+- NetBox's v0.4 schema phase attempted 83 candidates. Seventy application
+  executions failed before returning a structured verdict. Those candidates
+  were rejected as infrastructure errors; local irreducibility was not claimed.
+  See [the case](cases/netbox-17498.md).
+- Mastodon validates the same external process boundary using Ruby and Rails,
+  without a language-specific DBReduce dependency. Its 601 schema candidates
+  included 24 oracle infrastructure errors. A control that removed `accounts`
+  failed during Rails boot with `PG::UndefinedTable` before the framed oracle
+  could emit a verdict. Both cases illustrate the distinction between
+  an application-invalid schema candidate and an oracle-environment failure.
+- Matching native PostgreSQL clients are the round-trip baseline. A newer client
+  may dump an older server but emit SQL that cannot restore there. Installation
+  instructions describe this limitation in the [compatibility guide](compatibility.md).
+- Full application setup requires application-specific services and settings.
+  Mastodon needs Redis and Rails encryption settings for normal boot. These
+  belong to the application environment, not to DBReduce core.
+
+The [schema-candidate design discussion](candidate-invalid.md) describes a possible
+way to distinguish an application-invalid candidate from an oracle environment
+failure. This proposal is not part of the supported oracle protocol.

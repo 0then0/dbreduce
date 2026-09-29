@@ -1,19 +1,43 @@
 # Real-world validation
 
-This page records the original v0.2.0 validation. Current v0.3 measurements are
+## Ruby/Rails validation and regression checks
+
+On 2026-09-29, the unreleased compatibility version validated
+[Mastodon #37059](cases/mastodon-37059.md) with the actual Ruby/Rails migration in
+official v4.5.2 and v4.5.3 images, PostgreSQL/native clients 17.11 and framed JSON.
+Data reduction changed 1,757 rows to two; subsequent schema reduction changed
+109 tables to 12 and plain SQL from 262,004 to 44,111 bytes. Separate fresh
+restores of both exports reproduced the same v4.5.2 failure; the fixed application
+returned negative verdicts. DBReduce core needed no language-specific dependency.
+Twenty-four schema candidates produced oracle infrastructure errors, so schema
+local irreducibility is not claimed. This repeats the NetBox candidate/verdict
+limitation; see [the adoption evidence](adoption.md).
+
+Wagtail data-only reduction was rerun against the same 150,706-row source:
+published v0.4.0 and the unreleased version each reached three rows with
+36 oracle executions and preserved failure identity. A separate restore of the
+unreleased version's exported SQL passed the Wagtail oracle. The v0.4 NetBox
+four-table/two-row SQL was separately restored with native PG17 clients and
+passed the actual NetBox v4.1.1 form oracle. NetBox's full reduction was not
+repeated. The [performance comparison](benchmark.md#v040-and-unreleased-version-comparison)
+records the sequential Wagtail comparison.
+
+## Earlier validation
+
+The sections below summarize validation from v0.2.0 through v0.4.0. v0.3 measurements are
 in the [benchmark](benchmark.md); application details are in the
-[Wagtail](cases/wagtail-9208.md) and [NetBox](cases/netbox-17498.md) case notes.
+[Wagtail](cases/wagtail-9208.md) and [NetBox](cases/netbox-17498.md) case studies.
 
 The v0.4.0 opt-in schema run on the recreated Wagtail 8.0 source
 reduced 150,706 rows and 48 tables to 3 rows and 1 table. It preserved the
 failure identity after a fresh logical restore and after a separate `psql`
 restore of the published SQL. Counts and timings are in the
-[Wagtail case](cases/wagtail-9208.md#opt-in-schema-validation-development-v04).
+[Wagtail case](cases/wagtail-9208.md#opt-in-schema-validation-v040).
 The full public NetBox demo case reduced 21,381 rows and 180 tables to 2 rows
 and 4 tables. Its published SQL also passed separate restore and oracle checks.
 Seventy NetBox schema candidates produced oracle infrastructure errors, so
 its report does not claim local irreducibility. Counts and timings are in the
-[NetBox case](cases/netbox-17498.md#opt-in-schema-validation-development-v04).
+[NetBox case](cases/netbox-17498.md#opt-in-schema-validation-v040).
 
 ## v0.2.0 results
 
@@ -48,13 +72,13 @@ no database dump.
   tests passed, including different-failure rejection and oracle-write
   isolation. See the [CI run](https://github.com/0then0/dbreduce/actions/runs/36388139952).
 
-The [current Wagtail benchmark](benchmark.md#v03-wagtail-comparison) compares
+The [v0.3 Wagtail benchmark](benchmark.md#v03-wagtail-comparison) compares
 snapshot serial and parallel restores with clone strategies on the same
 150,706-row generated dataset. It records the PostgreSQL versions, Docker
 wrapper cost, all runs, phase totals, and fresh logical restore results.
 
 A full Wagtail reduction also completed on PostgreSQL 18 in an earlier v0.3
-development run: clone / `WAL_LOG`, 150,706 to 3 rows, 61.395s, with the same
+validation run: clone / `WAL_LOG`, 150,706 to 3 rows, 61.395s, with the same
 failure identity after fresh logical restore. That run predates the current
 comparative series. The official NetBox 4.1 demo dataset has a separate full
 PostgreSQL 17 reduction recorded in the [NetBox case report](cases/netbox-17498.md).

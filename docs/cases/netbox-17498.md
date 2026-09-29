@@ -81,9 +81,6 @@ condition from the issue was then added. The NetBox v4.1.1 form oracle reproduce
 dataset. This validates the demo dataset and application path, not the original
 user database.
 
-The case is intentionally smaller than the Wagtail benchmark; Wagtail was used
-for the 100k+ validation run.
-
 ### Public demo dataset run
 
 On 2026-09-28, the official NetBox 4.1 demo dump was restored to PostgreSQL
@@ -102,19 +99,14 @@ clone backend completed a full reduction:
 
 This is one end-to-end validation run, not a repeated performance benchmark.
 
-### Earlier reconstructed-dataset command
+### Earlier reconstructed-dataset configuration
 
-```bash
-TMPDIR=/private/tmp PATH=/private/tmp/dbreduce-pgtools:$PATH \
-  .venv/bin/python -m dbreduce reduce \
-  --database postgresql://postgres:postgres@localhost:55432/dbreduce_netbox_17498 \
-  --oracle '/private/tmp/dbreduce-validation/netbox/netbox_oracle.sh oracle' \
-  --oracle-json --confirm 2 --timeout 60 \
-  --output /private/tmp/dbreduce-netbox-17498.min.sql \
-  --report /private/tmp/dbreduce-netbox-17498.report.json
-```
-
-No virtual relationships were used.
+The reconstructed-dataset run used snapshot mode, `--oracle-json`, `--confirm 2`
+and `--timeout 60`, without virtual relationships. Its external wrapper invoked
+the form oracle in the official NetBox v4.1.1 container and read the workspace
+connection from `DATABASE_URL`. The wrapper was specific to the validation
+environment; the results below describe that run rather than provide a standalone
+setup script.
 
 ### Earlier reconstructed-dataset result
 
@@ -132,7 +124,7 @@ No virtual relationships were used.
 - Rejected candidates: 6.
 - Cache hits: 0.
 
-## Notes
+## Oracle requirements and limitations
 
 - The official NetBox Docker configuration prints configuration load messages to
   stdout during `django.setup()`. The oracle wrapper redirects that startup noise

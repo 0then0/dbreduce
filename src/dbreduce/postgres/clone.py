@@ -95,8 +95,8 @@ class CloneStore:
                 "SELECT setting FROM pg_settings WHERE name = 'file_copy_method'"
             ).fetchone()
             self.server_file_copy_method = cast(str, row[0]).lower() if row else None
-        if self.server_version < 170000:
-            raise ValueError("Clone backend requires PostgreSQL 17 or later")
+        if self.server_version < 150000:
+            raise ValueError("Clone backend requires PostgreSQL 15 or later")
         if file_copy_method is not None and self.server_file_copy_method is None:
             raise ValueError("file_copy_method requires PostgreSQL 18")
         self.clone_probe: str | None = None

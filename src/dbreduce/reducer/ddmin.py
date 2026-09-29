@@ -1,7 +1,10 @@
 from collections.abc import Iterator
+from typing import TypeVar
+
+T = TypeVar("T")
 
 
-def chunks[T](rows: list[T], size: int) -> Iterator[list[T]]:
+def chunks(rows: list[T], size: int) -> Iterator[list[T]]:
     for start in range(0, len(rows), size):
         yield rows[start : start + size]
 

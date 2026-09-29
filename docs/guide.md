@@ -13,10 +13,23 @@ python -m pip install dbreduce
 dbreduce --help
 ```
 
-DBReduce requires Python 3.13 or newer.
+The unreleased source requires Python 3.10 or newer and is tested on Python 3.10–3.14.
+Published v0.4.0 requires Python 3.13 or newer. The expanded compatibility range
+is not yet available on PyPI. The tested PostgreSQL range is 15–18, separately verified
+for snapshot, clone, schema reduction and final logical restore.
+See [the compatibility decision record](compatibility.md).
 
-Install PostgreSQL client tools (`pg_dump`, `pg_restore`) matching or newer than the
-server. Use a current, patched release supporting `pg_dump --restrict-key`.
+Prefer `uv tool install dbreduce` and check `dbreduce --help`.
+`uvx dbreduce --help` provides ephemeral execution. `python -m pip install dbreduce`
+remains supported. Install the CLI separately from the application; only the
+oracle process needs the application's runtime and dependencies.
+
+Install native PostgreSQL client tools (`pg_dump`, `pg_restore`, `psql`) matching
+the server major version. A newer `pg_dump`
+can read an older server, but its output is not guaranteed to restore back into
+that older server. That combination is outside the tested baseline. Use a current,
+patched release supporting `pg_dump --restrict-key` (introduced in clients 15.14,
+16.10, 17.6 and 18.0). Preserve native client behavior, including `\restrict`.
 The connection used for the workspace needs `CREATEDB` and permission to restore the
 schema. A separate `--admin-database` DSN can supply those privileges. A read-only
 source role is recommended. DBReduce only reads source metadata and uses `pg_dump`;
@@ -25,8 +38,8 @@ it never runs reduction SQL on the source.
 ## Reduce
 
 ```bash
-uv run dbreduce inspect --database postgresql://localhost/app_bug
-uv run dbreduce reduce \
+dbreduce inspect --database postgresql://localhost/app_bug
+dbreduce reduce \
   --database postgresql://localhost/app_bug \
   --oracle 'uv run pytest tests/test_checkout.py::test_negative_total' \
   --confirm 3
@@ -109,6 +122,7 @@ import json
 import pytest
 from app.checkout import NegativeTotalError
 
+
 class Identity:
     signature = None
     setup_error = False
@@ -125,6 +139,7 @@ class Identity:
                 )
             else:
                 self.setup_error = True
+
 
 identity = Identity()
 status = pytest.main(["-q", "tests/test_checkout.py::test_bug"], plugins=[identity])
@@ -208,7 +223,7 @@ The source can also be a PostgreSQL **custom-format archive**:
 ```bash
 pg_dump --format=custom --no-owner --no-privileges \
   --file app.dump postgresql://localhost/app_bug
-uv run dbreduce reduce --dump app.dump \
+dbreduce reduce --dump app.dump \
   --admin-database postgresql://localhost/postgres \
   --oracle 'uv run python examples/oracle.py' --oracle-json
 ```
@@ -223,7 +238,7 @@ are rejected because `pg_restore` refuses to read their database settings.
 Plain SQL is an output format, not an accepted input format. This avoids executing
 `psql` reconnect/shell meta-commands while restoring user input.
 
-Candidate isolation defaults to `--candidate-backend snapshot`. PostgreSQL 17/18
+Candidate isolation defaults to `--candidate-backend snapshot`. PostgreSQL 15–18
 can explicitly use `--candidate-backend clone`; see [isolation](isolation.md) for
 its ownership checks, replication preflight and final logical normalization.
 `--restore-jobs 4` enables parallel custom-archive restores when the environment
@@ -259,6 +274,9 @@ The fixture contains 12,005 rows across `users`, `orders`, `order_items`, `coupo
 and `payments`. A paid order with a coupon greater than its item total triggers the
 bug. The demo oracle returns the explicit identity `checkout-negative-total`.
 
+Run these commands from a source repository with the development environment
+installed as described in [Development](#development).
+
 ```bash
 createdb dbreduce_demo
 psql -X -v ON_ERROR_STOP=1 -d dbreduce_demo -f examples/fixture.sql
@@ -290,7 +308,7 @@ Unqualified tables resolve to `public`. Use exact table/column names without SQL
 quoting; names containing literal dots are not supported in this small config format.
 Single-column and composite relations are supported. Unknown fields, missing tables,
 invalid columns and incompatible equality operators are rejected before reduction.
-No dependencies are added: config uses standard-library JSON.
+Configuration files use standard JSON.
 
 Deleting a parent includes matching child rows, transitively alongside database
 FKs, including cycles. Comparisons use PostgreSQL `=` with its normal type and
@@ -299,7 +317,7 @@ Targets need not be unique: matching any deleted parent marks a child for deleti
 This is an explicit deletion policy, not a new PostgreSQL constraint. It does not
 repair preexisting orphans or prevent triggers from creating them. Child deletions
 alone do not delete parents. Virtual relationships are not inferred.
-Conditional/polymorphic relations are deferred; unsupported `where` is rejected.
+Conditional and polymorphic relationships are not supported; `where` is rejected.
 
 Inspect labels edges as `FK` or `virtual`, and includes both in dependency graphs
 and strongly connected components (multi-table SCCs indicate cycles; self edges
@@ -308,8 +326,8 @@ record virtual endpoints for reproducibility.
 
 ## Reports
 
-Existing top-level report keys are retained, including `oracle: "FAIL"`.
-New fields include `dbreduce_version`, `failure_identity`, `oracle_stats`,
+The report includes `oracle: "FAIL"` when the final state reproduces the bug.
+Other fields include `dbreduce_version`, `failure_identity`, `oracle_stats`,
 `candidate_backend`, `candidate_stats`, `relationships`, `performance`, `minimality`
 and `transformations`. `oracle_stats.outcomes` counts actual executions by outcome;
 `confirmations` is the configured N, not an additional execution count.

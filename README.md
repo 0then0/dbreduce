@@ -11,7 +11,7 @@
 
 <p align="center">
   <a href="https://pypi.org/project/dbreduce/"><img src="https://img.shields.io/pypi/v/dbreduce" alt="PyPI"></a>
-  <a href="https://www.python.org/"><img src="https://img.shields.io/badge/Python-3.13%2B-3776AB" alt="Python 3.13+"></a>
+  <a href="https://www.python.org/"><img src="https://img.shields.io/badge/Python-3.10%2B-3776AB" alt="Python 3.10+"></a>
   <a href="LICENSE"><img src="https://img.shields.io/pypi/l/dbreduce" alt="License"></a>
   <a href="https://github.com/0then0/dbreduce/actions/workflows/tests.yml"><img src="https://github.com/0then0/dbreduce/actions/workflows/tests.yml/badge.svg?branch=main" alt="Tests"></a>
 </p>
@@ -23,12 +23,23 @@ and explicitly configured application relationships.
 
 ## Quick start
 
-DBReduce requires Python 3.13 or newer, PostgreSQL, and client tools (`pg_dump` and
-`pg_restore`) compatible with your server. Install it with:
+The unreleased source supports Python 3.10–3.14 and PostgreSQL 15–18. Use current patched,
+matching-major `pg_dump`, `pg_restore` and `psql` tools; see the
+[compatibility report](docs/compatibility.md). Published v0.4.0 requires Python
+3.13 or newer; the expanded compatibility range is not yet available on PyPI.
+
+Install DBReduce as a standalone developer tool:
 
 ```bash
-python -m pip install dbreduce
+uv tool install dbreduce
+dbreduce --help
 ```
+
+`uvx dbreduce --help` also works without a persistent install. Standard installation
+remains available with `python -m pip install dbreduce`. DBReduce itself is Python
+software, but does not need to be installed in the application's environment or
+added to its dependencies. The oracle can be Ruby, Java, Go, Node.js, Python,
+shell, or any other executable.
 
 Then reduce a database with a test that identifies the bug:
 
@@ -50,12 +61,12 @@ For an oracle that can report a stable signature directly, use `--oracle-json` a
 have it write `{"reproduced": true, "signature": "checkout-negative-total"}` to
 stdout. See the guide for the verdict protocol and safety details.
 
-Version 0.3.0 adds `--oracle-framed-json` for applications that log to stdout,
-`--restore-jobs N` for parallel custom-archive restores, and an experimental,
-opt-in PostgreSQL 17/18 `--candidate-backend clone`. Snapshot isolation remains
-the default. Clone mode verifies a final logical restore before publishing SQL.
+Use `--oracle-framed-json` when the application logs to stdout. Snapshot isolation
+is the default; `--candidate-backend clone` is an experimental alternative on
+PostgreSQL 15–18. Both `WAL_LOG` and `FILE_COPY` are tested; `file_copy_method`
+requires PostgreSQL 18. `--restore-jobs N` enables parallel archive restores.
 
-Version 0.4.0 provides opt-in whole-table schema reduction with `--reduce-schema`.
+Use `--reduce-schema` for opt-in whole-table schema reduction.
 It runs after row reduction, checks each proposed removal with
 the same oracle, and exports only after a fresh logical restore. The default
 data-only behavior is unchanged. Use `--oracle-json` or `--oracle-framed-json` so
@@ -108,6 +119,23 @@ See the [real-world validation report](docs/real-world-validation.md) and
 [case studies](docs/cases/) for commands, environment, performance numbers, and
 limitations.
 
+Ruby/Rails validation uses
+[Mastodon #37059](docs/cases/mastodon-37059.md): 1,757 rows become two; optional
+schema reduction leaves 12 of 109 tables. The exported SQL reproduces the same
+migration exception in v4.5.2 after fresh restore; v4.5.3 returns a negative
+verdict. With the documented application container and network already set up,
+the validated oracle command is:
+
+```bash
+dbreduce reduce \
+  --database postgresql://postgres@dbreduce-adoption-pg17/mastodon_case \
+  --oracle 'docker exec -e DATABASE_URL="$DATABASE_URL" dbreduce-adoption-mastodon bundle exec rails runner /case/oracle.rb' \
+  --oracle-framed-json --confirm 2 --timeout 60
+```
+
+DBReduce runs separately from Rails. The case records 24 schema-phase oracle
+infrastructure errors and does not claim schema local irreducibility.
+
 See [CHANGELOG.md](CHANGELOG.md) for release history.
 
 ## Documentation
@@ -115,7 +143,10 @@ See [CHANGELOG.md](CHANGELOG.md) for release history.
 - [Usage, oracle identity, configuration, safety, and development](docs/guide.md)
 - [Benchmark and demo](docs/benchmark.md)
 - [Real-world validation report](docs/real-world-validation.md)
-- [PostgreSQL isolation investigation](docs/isolation.md)
+- [Candidate isolation and clone safety](docs/isolation.md)
+- [Tested compatibility and decisions](docs/compatibility.md)
+- [Trying DBReduce and reporting adoption blockers](CONTRIBUTING.md)
+- [Design discussion: application-invalid schema candidates](docs/candidate-invalid.md)
 
 ## Project links
 

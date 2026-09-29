@@ -64,16 +64,21 @@ This was intentionally not a minimal fixture. The bug itself needs three
 application schema with real foreign keys. The surrounding rows were generated
 application noise; this was not a production database dump.
 
-## DBReduce command
+## Data-only validation command
+
+The historical validation used a Docker application container named
+`dbreduce-wagtail-validation` with `wagtail_case.py` installed inside it. The
+following command expresses the same invocation with a standalone DBReduce CLI.
+It requires that application container and a container-reachable database URL;
+it is not a complete application setup script.
 
 ```bash
-TMPDIR=/private/tmp PATH=/private/tmp/dbreduce-pgtools:$PATH \
-  .venv/bin/python -m dbreduce reduce \
-  --database postgresql://postgres:postgres@localhost:55432/dbreduce_wagtail_9208 \
+dbreduce reduce \
+  --database "$SOURCE_DATABASE_URL" \
   --oracle 'docker exec -e DATABASE_URL="$DATABASE_URL" dbreduce-wagtail-validation python wagtail_case.py oracle' \
   --oracle-json --confirm 2 --timeout 60 \
-  --output /private/tmp/dbreduce-wagtail-9208.min.sql \
-  --report /private/tmp/dbreduce-wagtail-9208.report.json
+  --output wagtail-9208.min.sql \
+  --report wagtail-9208.report.json
 ```
 
 No virtual relationships were used.
@@ -88,17 +93,16 @@ No virtual relationships were used.
 - Fresh restore: PASS on PostgreSQL 17.
 - PostgreSQL 18 integration check: PASS by restoring the minimized SQL and running the same oracle.
 
-The v0.2 repeated measurements and the current v0.3 backend comparison are in
+The v0.2 repeated measurements and the v0.3 backend comparison are in
 the [benchmark report](../benchmark.md#v03-wagtail-comparison). The v0.3 runs
 used this same generated application dataset and preserved the same failure
 identity after fresh logical restore.
 
-## Notes
+## Oracle requirements and limitations
 
-- A first oracle draft aborted reduction when a candidate removed application
-  metadata and Wagtail raised a non-target exception. The oracle was narrowed so
-  non-target exceptions return `{"reproduced": false}`. This is an oracle quality
-  requirement, not a DBReduce feature change.
+- Removing application metadata can raise exceptions unrelated to this bug.
+  The validated oracle returns `{"reproduced": false}` for these non-target
+  exceptions instead of treating every application error as a reproduction.
 - The default `fixtree` command did not clear the condition in this environment;
   `fixtree --full` did.
 - The final dataset is small because the failure depends only on three collection
