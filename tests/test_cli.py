@@ -89,7 +89,8 @@ def test_publish_rolls_back_partial_sql_write(tmp_path, monkeypatch):
     assert list(tmp_path.glob(".dbreduce-*")) == []
 
 
-def test_reduce_json_identity_report(tmp_path, monkeypatch):
+@pytest.mark.parametrize("final_invalid", [False, True])
+def test_reduce_json_identity_report(tmp_path, monkeypatch, final_invalid):
     import shlex
     import sys
     from unittest.mock import MagicMock
@@ -106,7 +107,10 @@ def test_reduce_json_identity_report(tmp_path, monkeypatch):
     workspace.databases_created = 0
     workspace.databases_dropped = 0
     workspace.cleanup_failures = 0
+    from collections import Counter
+
     backend = MagicMock(probes=3, accepted=1, constraint_rejections=0, raise_rejections=0)
+    backend.outcomes = Counter()
     monkeypatch.setattr(cli, "require_clients", lambda: None)
     monkeypatch.setattr(cli.psycopg, "connect", lambda *a, **kw: connection)
     monkeypatch.setattr(cli, "Workspace", lambda *a, **kw: workspace)
@@ -115,7 +119,15 @@ def test_reduce_json_identity_report(tmp_path, monkeypatch):
     monkeypatch.setattr(
         cli, "inspect_database", lambda _: Schema((Table(("public", "items"), ("id",), 2),), ())
     )
-    monkeypatch.setattr(cli, "PostgresBackend", lambda *a: backend)
+
+    def make_backend(*args):
+        if final_invalid:
+            args[3].command = f"{shlex.quote(sys.executable)} -c " + shlex.quote(
+                'print(\'{"reproduced":false,"outcome":"candidate_invalid"}\')'
+            )
+        return backend
+
+    monkeypatch.setattr(cli, "PostgresBackend", make_backend)
     monkeypatch.setattr(cli, "reduce_state", lambda *a: {("public", "items"): [("x", 0)]})
     monkeypatch.setattr(cli, "dump", lambda dsn, path, **kw: path.write_text("SELECT 1;"))
     code = 'print(\'{"reproduced": true, "signature": "BUG_A"}\')'
@@ -136,6 +148,12 @@ def test_reduce_json_identity_report(tmp_path, monkeypatch):
             str(tmp_path / "report.json"),
         ],
     )
+    if final_invalid:
+        assert result.exit_code == 1
+        assert "Final oracle identity confirmation failed" in result.output
+        assert not (tmp_path / "result.sql").exists()
+        assert not (tmp_path / "report.json").exists()
+        return
     assert result.exit_code == 0, result.output
     report = json.loads((tmp_path / "report.json").read_text())
     identity = report["failure_identity"]
@@ -143,7 +161,12 @@ def test_reduce_json_identity_report(tmp_path, monkeypatch):
     assert identity["expected_signature"] == identity["final_signature"]
     assert report["oracle_executions"] == 4
     assert report["oracle_stats"]["outcomes"] == {"same_failure": 4}
-    assert report["candidate_stats"] == {"created": 3, "accepted": 1, "rejected": 2}
+    assert report["candidate_stats"] == {
+        "created": 3,
+        "accepted": 1,
+        "rejected": 2,
+        "candidate_invalid": 0,
+    }
     assert "BUG_A" not in (tmp_path / "report.json").read_text()
 
 

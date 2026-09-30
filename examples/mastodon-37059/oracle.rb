@@ -15,10 +15,6 @@ rescue ActiveRecord::RecordNotUnique => error
                cause.message.include?('Key (var)=(landing_page) already exists.')
 
   verdict = { reproduced: true, signature: 'mastodon-37059-landing-page-unique-violation' }
-rescue ActiveRecord::StatementInvalid => error
-  # A removed settings table is an invalid schema candidate, not the target bug.
-  raise unless error.cause.is_a?(PG::UndefinedTable)
 
-  puts 'Candidate is missing a table required by the migration'
 end
 puts "DBREDUCE_VERDICT #{JSON.generate(verdict)}"

@@ -1,5 +1,66 @@
 # NetBox issue #17498
 
+## Candidate validity validation (v0.5.0 source, 2026-09-30)
+
+The preserved data-only public-demo export (two rows, full 180-table schema) was
+restored unchanged to PostgreSQL 17.11 and reduced with the clone row backend,
+`--reduce-schema --oracle-json --confirm 2 --timeout 60`. This repeats the schema
+starting state without rerunning the original 21,381-row data reduction.
+The real NetBox v4.1.1 image ran the [pre-boot wrapper](../../examples/netbox-17498/wrapper.py)
+and [form oracle](../../examples/netbox-17498/oracle.py), using its existing
+Python 3.12/Django 5.0.9 environment. DBReduce ran on Python 3.13 in a separate
+native-client container. Redis 7 was available on the disposable Docker network.
+
+Before/after schema outcomes:
+
+- v0.4 protocol: 83 attempted, 13 accepted, 70 oracle infrastructure errors;
+  no negative, different-failure or restore-invalid schema candidates.
+- v0.5: 83 attempted, 13 accepted, 70 candidate-invalid, zero infrastructure
+  errors; no negative, different-failure or restore-invalid schema candidates.
+- The same four tables and two rows remain; schema objects are 1,577 → 27.
+- v0.5 elapsed: 284.590s, including 243.250s in schema reduction; 105 oracle
+  executions (32 same-failure, three row-negative verdicts, 70 candidate-invalid).
+  Schema itself used 96 executions: 26 same-failure and 70 candidate-invalid.
+- Historical full-run elapsed was 698.040s (403.791s schema), with 209 total
+  oracle executions. Full-run totals include data reduction and are not directly
+  comparable. These were single validations under different concurrent workloads,
+  not an acceleration benchmark.
+- DBReduce created/dropped 297 databases, with zero cleanup failures. Its final
+  uncached confirmation preserved the exact target identity.
+
+The wrapper declares `dcim_manufacturer`, `django_content_type`,
+`extras_customfield` and `extras_customfield_object_types` required for this form
+path. Each invalid verdict came from a successful read-only `to_regclass` query
+proving a declared table absent. It did not classify stderr or arbitrary Django
+exceptions. The new run's 70 outcomes are direct validity evidence; the historical
+70 errors are aggregate records, not retrospective diagnoses of saved crashes.
+No unresolved infrastructure candidates occurred in the new run; that does not
+establish that the wrapper can diagnose every NetBox startup failure.
+
+Controls on separate native restores passed: unmodified final SQL reproduced
+`netbox-17498-manufacturer-description-multiple-objects`; removing the required
+manufacturer table emitted candidate-invalid; removing one duplicate manufacturer
+emitted an ordinary negative verdict. An unreachable database port exited nonzero
+without a verdict. Unknown form/setup exceptions propagate; only the specific
+`Manufacturer.MultipleObjectsReturned` exception reproduces the target.
+The report explicitly sets schema `locally_irreducible: false`,
+`blocked_by_candidate_invalid: true`, and `infrastructure_errors: 0`.
+
+Run the wrapper inside the application image with normal NetBox configuration,
+a container-reachable candidate URL and the source mounted read-only at `/case`:
+
+```bash
+docker exec -w /opt/netbox/netbox -e PYTHONPATH=/opt/netbox/netbox \
+  -e DATABASE_URL="$DATABASE_URL" app-container \
+  /opt/netbox/venv/bin/python /case/wrapper.py
+```
+
+Keep generated `SECRET_KEY` and Redis/database settings in the application's
+external environment. The wrapper sets all NetBox `DB_*` fields from the established preflight
+connection, including resolved defaults and credentials, overriding inherited
+application connection settings and execs the real form oracle. It is a case example, not a framework SDK.
+
+
 ## Opt-in schema validation (v0.4.0)
 
 On 2026-09-28, the public NetBox 4.1 demo SQL was restored again, and the

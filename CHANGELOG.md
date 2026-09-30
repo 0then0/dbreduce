@@ -2,6 +2,17 @@
 
 Notable user-facing changes.
 
+## [0.5.0] - Unreleased
+
+- Extend strict/framed structured verdicts with explicit `candidate_invalid`,
+  rejecting contradictory/unknown outcomes without inferring validity from output.
+- Keep invalid application candidates separate from target-negative verdicts,
+  different failures, infrastructure failures and invalid schema reconstruction.
+- Count validity barriers for row/schema reduction and qualify local minimality
+  claims; preserve confirmation, exact-state cache and fresh final restore policies.
+- Add case-specific pre-boot Mastodon/NetBox wrappers and protocol/integration
+  regressions. No framework integrations or additional schema primitives.
+
 ## [0.4.1] - 2026-09-29
 
 - Lower the package's Python minimum to 3.10 after interpreter, type, lint,

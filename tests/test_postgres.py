@@ -732,7 +732,8 @@ def test_cli_preserves_source_and_exports(workspace, tmp_path):
 
 
 @pytest.mark.parametrize("backend", ["snapshot", "clone"])
-def test_schema_reduction_keeps_required_tables_and_fresh_restore(tmp_path, backend):
+@pytest.mark.parametrize("validity", [False, True])
+def test_schema_reduction_keeps_required_tables_and_fresh_restore(tmp_path, backend, validity):
     import json
 
     from typer.testing import CliRunner
@@ -790,6 +791,10 @@ except psycopg.Error:
     verdict = {'reproduced': False, 'error': 'database setup failed'}
 print(json.dumps(verdict))
 """
+        if validity:
+            code = code.replace(
+                "'error': 'startup table missing'", "'outcome': 'candidate_invalid'"
+            )
         command = f"{shlex.quote(sys.executable)} -c {shlex.quote(code)}"
         output, report_path = tmp_path / "min.sql", tmp_path / "report.json"
         result = CliRunner().invoke(
@@ -827,7 +832,13 @@ print(json.dumps(verdict))
         )
         assert schema["candidates"]["different_failure"] >= 1
         assert schema["candidates"]["invalid_schema"] >= 1
-        assert schema["candidates"]["oracle_infrastructure_error"] >= 1
+        assert schema["candidates"]["candidate_invalid"] >= int(validity)
+        assert (schema["candidates"]["oracle_infrastructure_error"] == 0) == validity
+        assert schema["minimality"]["blocked_by_candidate_invalid"] == validity
+        assert (
+            schema["minimality"]["infrastructure_errors"]
+            == (schema["candidates"]["oracle_infrastructure_error"])
+        )
         assert schema["minimality"]["locally_irreducible"] is False
         assert report["minimality_by_phase"] == {
             "data": {"locally_irreducible": True},
@@ -1379,3 +1390,85 @@ def test_clone_cleanup_interrupt_names_owned_leftover(workspace, tmp_path):
                 "SELECT EXISTS (SELECT 1 FROM pg_database WHERE oid = %s)",
                 (accepted.oid,),
             ).fetchone()[0]
+
+
+@pytest.mark.parametrize("backend", ["snapshot", "clone"])
+def test_candidate_invalid_rows_keep_validity_barrier_and_isolate_writes(tmp_path, backend):
+    import json
+
+    from typer.testing import CliRunner
+
+    from dbreduce.cli import app
+
+    admin = os.environ.get("DBREDUCE_TEST_ADMIN")
+    if not admin or not all(shutil.which(tool) for tool in ("pg_dump", "pg_restore", "psql")):
+        pytest.skip("Set DBREDUCE_TEST_ADMIN and install PostgreSQL client tools")
+    with Workspace(admin) as source:
+        source.create()
+        with psycopg.connect(source.dsn) as conn:
+            conn.execute("CREATE TABLE required_app_table (id integer PRIMARY KEY)")
+            conn.execute("CREATE TABLE bug_table (id integer PRIMARY KEY)")
+            conn.execute("CREATE TABLE unused_table (id integer PRIMARY KEY)")
+            conn.execute("INSERT INTO required_app_table VALUES (1)")
+            conn.execute("INSERT INTO bug_table VALUES (1)")
+            conn.execute("INSERT INTO unused_table VALUES (1), (2)")
+        code = """
+import json, os, psycopg
+with psycopg.connect(os.environ['DATABASE_URL']) as conn:
+    required = conn.execute('SELECT count(*) FROM required_app_table').fetchone()[0]
+    bug = conn.execute('SELECT count(*) FROM bug_table WHERE id = 1').fetchone()[0]
+    conn.execute('INSERT INTO bug_table VALUES (2) ON CONFLICT DO NOTHING')
+    if not required:
+        verdict = {'reproduced': False, 'outcome': 'candidate_invalid'}
+    else:
+        verdict = {'reproduced': bool(bug), 'signature': 'BUG_A'}
+print(json.dumps(verdict))
+"""
+        command = f"{shlex.quote(sys.executable)} -c {shlex.quote(code)}"
+        output, report_path = tmp_path / "min.sql", tmp_path / "report.json"
+        result = CliRunner().invoke(
+            app,
+            [
+                "reduce",
+                "--database",
+                source.dsn,
+                "--oracle",
+                command,
+                "--oracle-json",
+                "--candidate-backend",
+                backend,
+                "--confirm",
+                "2",
+                "--output",
+                str(output),
+                "--report",
+                str(report_path),
+            ],
+        )
+        assert result.exit_code == 0, result.output
+        report = json.loads(report_path.read_text())
+        assert report["candidate_stats"]["candidate_invalid"] > 0
+        assert report["oracle_stats"]["outcomes"]["candidate_invalid"] > 0
+        assert report["oracle_stats"]["outcomes"]["passed"] > 0
+        assert report["failure_identity"]["preserved"]
+        assert report["minimality_by_phase"]["data"] == {
+            "locally_irreducible": False,
+            "blocked_by_candidate_invalid": True,
+        }
+        assert report["minimality"] == "local irreducibility not established"
+        restored = report["restore_database"]
+        try:
+            client(["psql", "-X", "-v", "ON_ERROR_STOP=1", "-f", str(output)], admin)
+            restored_dsn = make_conninfo(admin, dbname=restored)
+            with psycopg.connect(restored_dsn) as conn:
+                assert conn.execute("SELECT id FROM required_app_table").fetchall() == [(1,)]
+                assert conn.execute("SELECT id FROM bug_table").fetchall() == [(1,)]
+                assert conn.execute("SELECT count(*) FROM unused_table").fetchone() == (0,)
+            assert Oracle(command, structured=True, confirm=2).fails(
+                database_url(admin, restored), lambda: None
+            )
+        finally:
+            with psycopg.connect(admin, autocommit=True) as conn:
+                conn.execute(
+                    sql.SQL("DROP DATABASE {} WITH (FORCE)").format(sql.Identifier(restored))
+                )

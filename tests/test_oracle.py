@@ -118,8 +118,10 @@ def test_matcher_locks_initial_exit_code():
     assert not oracle.fails("postgresql:///test", lambda: None)
 
 
-def test_json_false_is_passed():
-    oracle = Oracle(command("print('{\"reproduced\": false}')"), structured=True)
+@pytest.mark.parametrize("framed", [False, True])
+def test_json_false_is_passed(framed):
+    verdict = ("DBREDUCE_VERDICT " if framed else "") + '{"reproduced": false}'
+    oracle = Oracle(command(f"print({verdict!r})"), structured=not framed, framed=framed)
     assert not oracle.fails("postgresql:///test", lambda: None)
     assert oracle.last_outcome == "passed"
 
@@ -149,6 +151,10 @@ def test_framed_json_ignores_application_logs_and_locks_identity():
     [
         ["ordinary log"],
         ["DBREDUCE_VERDICT garbage"],
+        [
+            'DBREDUCE_VERDICT {"reproduced":false,"outcome":"candidate_invalid"}',
+            'DBREDUCE_VERDICT {"reproduced":false,"outcome":"candidate_invalid"}',
+        ],
         [
             'DBREDUCE_VERDICT {"reproduced":true,"signature":"A"}',
             'DBREDUCE_VERDICT {"reproduced":true,"signature":"A"}',
@@ -232,3 +238,100 @@ def test_regex_matcher_timeout_is_separate_from_oracle_exit():
         oracle.fails("postgresql:///test", lambda: None)
     assert oracle.last_outcome == "timeout"
     assert oracle.outcomes["timeout"] == 1
+
+
+@pytest.mark.parametrize("framed", [False, True])
+def test_candidate_invalid_rejects_without_confirming_or_changing_identity(framed):
+    import json
+
+    oracle = Oracle("", structured=not framed, framed=framed, confirm=3)
+    oracle.expected_signature = "sha256:target"
+    verdict = json.dumps({"reproduced": False, "outcome": "candidate_invalid"})
+    lines = ["log", "DBREDUCE_VERDICT " + verdict, "log"] if framed else [verdict]
+    oracle.command = command("\n".join(f"print({line!r})" for line in lines))
+    calls = []
+    assert not oracle.fails("postgresql:///test", lambda: calls.append(1), lambda: calls.append(2))
+    assert oracle.last_outcome == "candidate_invalid"
+    assert oracle.outcomes["candidate_invalid"] == 1
+    assert oracle.executions == 1
+    assert calls == [1, 2]
+    assert oracle.expected_signature == "sha256:target"
+    assert oracle.final_signature is None
+
+
+@pytest.mark.parametrize("framed", [False, True])
+@pytest.mark.parametrize(
+    "fields",
+    [
+        {"reproduced": True, "outcome": "candidate_invalid", "signature": "BUG_A"},
+        {"reproduced": False, "outcome": "unknown"},
+        {"reproduced": False, "outcome": None},
+        {"reproduced": False, "outcome": []},
+        {"reproduced": False, "outcome": 1},
+        {"reproduced": False, "outcome": "candidate_invalid", "signature": "BUG_B"},
+        {"reproduced": False, "outcome": "candidate_invalid", "signature": None},
+        {"reproduced": False, "outcome": "candidate_invalid", "error": "offline"},
+    ],
+)
+def test_invalid_outcome_fields_fail_closed(framed, fields):
+    import json
+
+    verdict = ("DBREDUCE_VERDICT " if framed else "") + json.dumps(fields)
+    oracle = Oracle(command(f"print({verdict!r})"), structured=not framed, framed=framed)
+    with pytest.raises(OracleError):
+        oracle.fails("postgresql:///test", lambda: None)
+    assert oracle.last_outcome == "infrastructure_error"
+
+
+@pytest.mark.parametrize("framed", [False, True])
+def test_candidate_invalid_requires_zero_exit(framed):
+    verdict = ("DBREDUCE_VERDICT " if framed else "") + (
+        '{"reproduced":false,"outcome":"candidate_invalid"}'
+    )
+    oracle = Oracle(
+        command(f"print({verdict!r}); raise SystemExit(1)"), structured=not framed, framed=framed
+    )
+    with pytest.raises(OracleError):
+        oracle.fails("postgresql:///test", lambda: None)
+    assert oracle.last_outcome == "infrastructure_error"
+
+
+@pytest.mark.parametrize("first", ["same_failure", "candidate_invalid"])
+def test_confirmation_rejects_mixed_validity(first):
+    import json
+
+    oracle = Oracle("", structured=True, confirm=3)
+    oracle.expected_signature = "sha256:target"
+    verdicts = iter(
+        [
+            {"reproduced": True, "signature": "BUG_A"}
+            if first == "same_failure"
+            else {"reproduced": False, "outcome": "candidate_invalid"},
+            {"reproduced": False, "outcome": "candidate_invalid"},
+        ]
+    )
+    if first == "same_failure":
+        import hashlib
+
+        oracle.expected_signature = "sha256:" + hashlib.sha256(b"BUG_A").hexdigest()
+
+    def prepare():
+        verdict = json.dumps(next(verdicts))
+        oracle.command = command(f"print({verdict!r})")
+
+    assert not oracle.fails("postgresql:///test", prepare)
+    assert oracle.executions == (2 if first == "same_failure" else 1)
+    assert oracle.last_outcome == "candidate_invalid"
+
+
+def test_unknown_application_crash_remains_infrastructure_error():
+    oracle = Oracle(
+        command(
+            "import sys; print('PG::UndefinedTable Redis unavailable', "
+            "file=sys.stderr); raise SystemExit(1)"
+        ),
+        structured=True,
+    )
+    with pytest.raises(OracleError):
+        oracle.fails("postgresql:///test", lambda: None)
+    assert oracle.last_outcome == "infrastructure_error"

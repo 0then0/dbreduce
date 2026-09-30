@@ -13,7 +13,7 @@ python -m pip install dbreduce
 dbreduce --help
 ```
 
-DBReduce v0.4.1 requires Python 3.10 or newer and is tested on Python 3.10–3.14.
+DBReduce v0.5.0 requires Python 3.10 or newer and is tested on Python 3.10–3.14.
 The tested PostgreSQL range is 15–18, separately verified
 for snapshot, clone, schema reduction and final logical restore.
 See [the compatibility decision record](compatibility.md).
@@ -86,11 +86,13 @@ exit **zero** and write exactly one JSON object to stdout:
 ```
 
 The first reproduced signature becomes the expected identity. Every later verdict
-must match it exactly. `{"reproduced": false}` means the bug disappeared. A different
+must match it exactly. `{"reproduced": false}` means the oracle evaluated the target bug and did not reproduce it. A different
 signature is a different failure and rejects the candidate. An `error` field with
 a non-null value signals an infrastructure error. Malformed JSON, missing/invalid
 fields, and nonzero process status in JSON mode abort reduction. Signature must be
-a nonempty string of at most 256 characters. Extra fields are ignored. JSON mode
+a nonempty string of at most 256 characters. An explicit `outcome` must be `"candidate_invalid"`, with
+`reproduced: false` and no `signature`; unknown/contradictory outcomes fail closed.
+Other extra fields are ignored. JSON mode
 cannot be combined with exit/output matchers.
 
 For applications that log to stdout, use `--oracle-framed-json`. The command must
@@ -98,6 +100,18 @@ exit zero and emit exactly one line beginning `DBREDUCE_VERDICT `, followed by t
 same JSON verdict. Other stdout lines are ignored and never saved. Zero or multiple
 framed lines, malformed JSON and nonzero exit status are infrastructure errors.
 The 1 MiB captured-output limit still applies. Strict `--oracle-json` is unchanged.
+
+A structured oracle can explicitly reject a database it cannot meaningfully test:
+
+```json
+{"reproduced": false, "outcome": "candidate_invalid"}
+```
+
+This is distinct from a negative target check and an infrastructure error. It works
+for data and schema reduction and never preserves the bug. The core does not infer
+it from stderr or exit status. A case-specific wrapper can check known preconditions
+before framework boot; unknown failures still propagate. See the
+[complete validity contract and wrapper examples](candidate-invalid.md).
 
 Python script:
 
@@ -191,7 +205,9 @@ address in the wrapper. No verdict file needs to be shared with the container.
 
 `--confirm N` requires N/N matching verdicts, each starting from a fresh snapshot
 restore or separate clone of the pristine candidate.
-The first mismatch rejects the candidate immediately. The initial and final
+The first mismatch, negative verdict or candidate-invalid verdict rejects the
+candidate immediately, with no additional confirmations or retries. A later
+conflicting outcome is not sampled after early rejection. The initial and final
 confirmation also require N/N; a mismatch there aborts export. This does not prove
 stability of a flaky oracle. Cached outcomes assume determinism within one run.
 
@@ -352,7 +368,12 @@ the same format; they do not compare compressed and uncompressed files. Schema
 candidate caching is disabled. `performance.phases` includes schema planning,
 introspection, reconstruction, restore, oracle execution, and final normalization.
 `minimality_by_phase` states the row and table conclusions separately; the
-existing top-level `minimality` string remains for older report consumers.
+top-level `minimality` string remains for older report consumers, but reads
+`local irreducibility not established` when a phase encounters a validity,
+restore, infrastructure or different-failure barrier. Candidate-invalid counts
+and `blocked_by_candidate_invalid` are separate from negative target checks.
+Phase barriers are cumulative; cached rejections do not add oracle executions.
+See [report and cache semantics](candidate-invalid.md#reports-minimality-and-cache).
 The minimality claim means locally irreducible under attempted transformations,
 not a global minimum or reduction of every PostgreSQL object class.
 
@@ -391,8 +412,8 @@ FK closure and candidate dumps require memory/disk proportional to the dataset.
 - Extension-owned tables are rejected because `pg_dump` may omit their rows.
 - Triggers run normally and can change the result. Restrictive constraints can prevent
   otherwise useful reductions. No constraints or security controls are disabled.
-- Results are locally irreducible under the attempted FK-closed deletions, not
-  mathematically minimal. FK closure deliberately deletes dependent rows even for
+- Local irreducibility, when established without validity or unresolved-check
+  barriers, covers attempted FK-closed deletions, not a mathematical minimum. FK closure deliberately deletes dependent rows even for
   `SET NULL`/`SET DEFAULT` actions, which can miss smaller alternatives.
 - Nondeterministic tests can produce incorrect minimization. `--confirm` mitigates,
   but does not solve, flakiness. Cached outcomes assume deterministic behavior.

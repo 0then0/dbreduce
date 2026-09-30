@@ -23,7 +23,7 @@ and explicitly configured application relationships.
 
 ## Quick start
 
-DBReduce v0.4.1 supports Python 3.10–3.14 and PostgreSQL 15–18. Use current patched,
+DBReduce v0.5.0 supports Python 3.10–3.14 and PostgreSQL 15–18. Use current patched,
 matching-major `pg_dump`, `pg_restore` and `psql` tools; see the
 [compatibility report](docs/compatibility.md).
 
@@ -58,7 +58,11 @@ functions, triggers, and external services can have effects outside that copy.
 
 For an oracle that can report a stable signature directly, use `--oracle-json` and
 have it write `{"reproduced": true, "signature": "checkout-negative-total"}` to
-stdout. See the guide for the verdict protocol and safety details.
+stdout. Structured oracles can also explicitly report
+`{"reproduced":false,"outcome":"candidate_invalid"}` when schema/data removal
+violates declared application preconditions. DBReduce rejects it separately from
+target-bug disappearance and infrastructure failures. See the
+[candidate-validity contract](docs/candidate-invalid.md) and guide for details.
 
 Use `--oracle-framed-json` when the application logs to stdout. Snapshot isolation
 is the default; `--candidate-backend clone` is an experimental alternative on
@@ -82,8 +86,9 @@ an application startup error cannot count as the original bug.
   dependencies; reports schema object counts and logical SQL size.
 
 Without an identity matcher, legacy mode accepts any nonzero application exit status
-and prints a warning. The result is locally irreducible under attempted
-relationship-closed transformations; DBReduce does not promise a global minimum.
+and prints a warning. Reports claim local irreducibility under attempted
+relationship-closed transformations only when no validity or unresolved-check
+barrier prevents it; DBReduce does not promise a global minimum.
 By default, DBReduce writes `dbreduce.min.sql` and `dbreduce-report.json` and never
 overwrites existing files.
 
@@ -145,7 +150,7 @@ See [CHANGELOG.md](CHANGELOG.md) for release history.
 - [Candidate isolation and clone safety](docs/isolation.md)
 - [Tested compatibility and decisions](docs/compatibility.md)
 - [Trying DBReduce and reporting adoption blockers](CONTRIBUTING.md)
-- [Design discussion: application-invalid schema candidates](docs/candidate-invalid.md)
+- [Candidate validity and structured oracle protocol](docs/candidate-invalid.md)
 
 ## Project links
 

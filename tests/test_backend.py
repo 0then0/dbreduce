@@ -5,10 +5,12 @@ import pytest
 
 from dbreduce.cache.store import Cache
 from dbreduce.models.schema import Schema
+from dbreduce.oracle.runner import OracleOutcome
 from dbreduce.postgres.backend import PostgresBackend
 
 
-def test_cache_distinguishes_sequence_changes_with_identical_rows(tmp_path):
+@pytest.mark.parametrize("outcome", [OracleOutcome.NOT_REPRODUCED, OracleOutcome.CANDIDATE_INVALID])
+def test_cache_distinguishes_sequence_changes_with_identical_rows(tmp_path, outcome):
     table = ("public", "items")
     baseline = {table: [("a", 0), ("b", 0)]}
     candidate = {table: [("a", 0)]}
@@ -17,6 +19,7 @@ def test_cache_distinguishes_sequence_changes_with_identical_rows(tmp_path):
     workspace = MagicMock()
     oracle = MagicMock()
     oracle.fails.return_value = False
+    oracle.last_outcome = outcome
     snapshot = tmp_path / "accepted.dump"
     snapshot.write_bytes(b"accepted")
     sql_bytes = [b"same data, sequence 1"]
@@ -37,9 +40,11 @@ def test_cache_distinguishes_sequence_changes_with_identical_rows(tmp_path):
         assert not backend.attempt(table, [("b", 0)])
         assert oracle.fails.call_count == 1
         assert cache.hits == 1
+        assert backend.outcomes[outcome] == 1
         sql_bytes[0] = b"same data, sequence 2"
         assert not backend.attempt(table, [("b", 0)])
         assert oracle.fails.call_count == 2
+        assert backend.outcomes[outcome] == 2
         assert snapshot.read_bytes() == b"accepted"
         assert backend.state() == baseline
 

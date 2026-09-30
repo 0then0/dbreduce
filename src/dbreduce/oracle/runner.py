@@ -9,10 +9,23 @@ import sys
 import time
 from collections import Counter
 from collections.abc import Callable
+from enum import Enum
 
 from dbreduce.performance import Performance
 
 VERDICT_PREFIX = "DBREDUCE_VERDICT "
+
+
+class OracleOutcome(str, Enum):
+    SAME_FAILURE = "same_failure"
+    NOT_REPRODUCED = "passed"  # Preserve v0.4 report vocabulary.
+    CANDIDATE_INVALID = "candidate_invalid"
+    DIFFERENT_FAILURE = "different_failure"
+    INFRASTRUCTURE_ERROR = "infrastructure_error"
+    TIMEOUT = "timeout"
+
+    def __str__(self) -> str:
+        return self.value
 
 
 class OracleError(RuntimeError):
@@ -97,11 +110,11 @@ class Oracle:
         self.executions = 0
         self.seconds = 0.0
         self.outcomes: Counter[str] = Counter()
-        self.last_outcome = "not_run"
+        self.last_outcome: OracleOutcome | None = None
 
     def _classify(
         self, code: int, stdout: str, stderr: str, *, matcher_timeout: float
-    ) -> tuple[str, str | None]:
+    ) -> tuple[OracleOutcome, str | None]:
         if code < 0 or code >= 126:
             raise OracleError("Oracle infrastructure error: launch failure or signal status")
         if self.mode in ("json", "framed_json"):
@@ -124,8 +137,16 @@ class Oracle:
                 raise OracleError("Structured oracle requires a boolean reproduced field")
             if verdict.get("error") is not None:
                 raise OracleError("Structured oracle reported an infrastructure error")
+            if "outcome" in verdict:
+                if verdict["outcome"] != "candidate_invalid":
+                    raise OracleError("Unknown structured oracle outcome")
+                if verdict["reproduced"] or "signature" in verdict:
+                    raise OracleError(
+                        "Candidate-invalid verdict cannot reproduce or carry a signature"
+                    )
+                return OracleOutcome.CANDIDATE_INVALID, None
             if not verdict["reproduced"]:
-                return "passed", None
+                return OracleOutcome.NOT_REPRODUCED, None
             signature = verdict.get("signature")
             if not isinstance(signature, str) or not signature or len(signature) > 256:
                 raise OracleError("Structured oracle requires a nonempty signature (max 256 chars)")
@@ -133,9 +154,9 @@ class Oracle:
             identity = "sha256:" + hashlib.sha256(signature.encode()).hexdigest()
         else:
             if code == 0:
-                return "passed", None
+                return OracleOutcome.NOT_REPRODUCED, None
             if self.expected_exit_code is not None and code != self.expected_exit_code:
-                return "different_failure", None
+                return OracleOutcome.DIFFERENT_FAILURE, None
             if self.stdout_pattern is not None or self.stderr_pattern is not None:
                 if matcher_timeout <= 0:
                     raise subprocess.TimeoutExpired("oracle matcher", self.timeout)
@@ -161,11 +182,11 @@ class Oracle:
                 except (OSError, subprocess.CalledProcessError) as error:
                     raise OracleError("Could not evaluate oracle identity matchers") from error
                 if json.loads(result.stdout) is not True:
-                    return "different_failure", None
+                    return OracleOutcome.DIFFERENT_FAILURE, None
             identity = "any-nonzero" if self.mode == "legacy" else f"exit:{code}"
         if self.expected_signature is not None and identity != self.expected_signature:
-            return "different_failure", identity
-        return "same_failure", identity
+            return OracleOutcome.DIFFERENT_FAILURE, identity
+        return OracleOutcome.SAME_FAILURE, identity
 
     def _run(self, env: dict[str, str]) -> tuple[int, str, str]:
         capture_out = self.mode in ("json", "framed_json") or self.stdout_pattern is not None
@@ -267,13 +288,13 @@ class Oracle:
                         matcher_timeout=self.timeout - (time.monotonic() - started),
                     )
                 except subprocess.TimeoutExpired as error:
-                    self.last_outcome = "timeout"
+                    self.last_outcome = OracleOutcome.TIMEOUT
                     self.outcomes[self.last_outcome] += 1
                     raise OracleError(
                         "Oracle timed out; this is not a reproduced failure"
                     ) from error
                 except (OSError, OracleError) as error:
-                    self.last_outcome = "infrastructure_error"
+                    self.last_outcome = OracleOutcome.INFRASTRUCTURE_ERROR
                     self.outcomes[self.last_outcome] += 1
                     raise OracleError(
                         str(error) if isinstance(error, OracleError) else "Could not launch oracle"
@@ -286,7 +307,7 @@ class Oracle:
             self.last_outcome = outcome
             self.outcomes[outcome] += 1
             self.final_signature = identity
-            if outcome != "same_failure":
+            if outcome != OracleOutcome.SAME_FAILURE:
                 return False
             if self.expected_signature is None:
                 self.expected_signature = identity
@@ -297,7 +318,7 @@ class Oracle:
             "mode": self.mode,
             "expected_signature": self.expected_signature,
             "final_signature": self.final_signature,
-            "preserved": self.last_outcome == "same_failure",
+            "preserved": self.last_outcome == OracleOutcome.SAME_FAILURE,
             "expected_exit_code": self.expected_exit_code,
             "stdout_regex": self.stdout_pattern.pattern if self.stdout_pattern else None,
             "stderr_regex": self.stderr_pattern.pattern if self.stderr_pattern else None,

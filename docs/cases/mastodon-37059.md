@@ -1,5 +1,53 @@
 # Mastodon issue #37059
 
+## Candidate validity validation (v0.5.0 source, 2026-09-30)
+
+The preserved data-only export was restored unchanged on PostgreSQL 17.11:
+two settings rows with the full 109-table schema. The same schema phase ran
+with snapshot isolation, `--reduce-schema --oracle-framed-json --confirm 2
+--timeout 60`, using the real v4.5.2 image and the
+[pre-boot wrapper](../../examples/mastodon-37059/wrapper.rb). DBReduce used Python
+3.13 with native PG17 clients; Redis 7 and the normal generated application
+settings were available on the disposable network.
+
+Before/after schema outcomes:
+
+- v0.4.1: 601 attempted, 27 accepted, 26 negative verdicts, 524 invalid-schema
+  reconstructions, 24 oracle infrastructure errors.
+- v0.5: 601 attempted, 27 accepted, 26 candidate-invalid, zero negative schema
+  verdicts, 524 invalid-schema reconstructions, 24 oracle infrastructure errors.
+- Tables: 109 → 12; schema objects: 868 → 116; rows: two → two.
+- Plain SQL: 262,004 → 44,111 bytes. Final failure identity is unchanged.
+- v0.5 elapsed: 618.422s (584.482s schema); 111 oracle executions, comprising
+  58 same-failure confirmations, three data-negative verdicts, 26 candidate-invalid
+  and 24 infrastructure errors. Schema used 104 executions: 54 same-failure,
+  26 candidate-invalid and 24 infrastructure errors.
+- The historical schema-input run took 531.926s (474.437s schema), also 111
+  executions. Concurrent PostgreSQL matrix tests and NetBox reduction ran during
+  this validation, so these timings are not an acceleration benchmark.
+- DBReduce created/dropped 829 databases, with zero cleanup failures. Schema
+  `locally_irreducible` is false, `blocked_by_candidate_invalid` is true, and
+  `infrastructure_errors` is 24.
+
+The wrapper declares `accounts` required for boot and `settings` required for the
+target migration. Only successful metadata queries proving one absent emit
+candidate-invalid. The 26 invalid verdicts correspond to candidates that the old
+migration oracle classified as negative after a missing-table exception; they
+are not evidence of target-bug disappearance. The 24 infrastructure outcomes
+remain unresolved under this narrow contract. They were not relabeled from
+stderr or from the fact that schema changed. The standalone missing-`accounts`
+control is explicitly recognized, but does not imply that these 24 restore-valid
+schema probes removed `accounts` or that every Rails boot failure is understood.
+
+A separate native `psql` restore of the unmodified final SQL reproduced the exact
+v4.5.2 signature. On a disposable copy, removing `accounts` emitted
+candidate-invalid before Rails boot. Removing `landing_page` produced an ordinary
+negative verdict. A connection to an unreachable PostgreSQL port failed nonzero
+without a verdict. The same final SQL and wrapper in fixed v4.5.3 returned
+`reproduced: false` through the unmodified migration. These controls validate
+explicit known invalidity and preserve unknown failures as infrastructure errors.
+
+
 ## Project and issue
 
 - Project: [mastodon/mastodon](https://github.com/mastodon/mastodon).
@@ -34,7 +82,7 @@ PostgreSQL, Redis and freshly generated Rails encryption settings.
 ## Oracle
 
 [The Ruby oracle](../../examples/mastodon-37059/oracle.rb) runs inside the real
-Mastodon application with `bundle exec rails runner`. It loads the application's
+Mastodon application with `bundle exec rails runner`, invoked by the wrapper. It loads the application's
 unaltered migration file and calls `MigrateLandingPageSetting.new.migrate(:up)`.
 It does not reimplement the failing operation as SQL. Only the specific exception,
 constraint and `landing_page` detail produce:
@@ -43,9 +91,12 @@ constraint and `landing_page` detail produce:
 DBREDUCE_VERDICT {"reproduced":true,"signature":"mastodon-37059-landing-page-unique-violation"}
 ```
 
-Successful migration returns `reproduced: false`. A missing table during migration
-returns a negative verdict with a log line. Other exceptions propagate as errors.
-Rails boot precedes this script, so a boot-time exception can prevent the verdict.
+Successful migration returns `reproduced: false`. The v0.4.1 script returned a negative verdict for a missing migration table;
+other exceptions propagated, and boot-time errors could prevent any verdict.
+In v0.5 the [wrapper](../../examples/mastodon-37059/wrapper.rb) runs before Rails
+boot and explicitly checks the case's required `accounts` and `settings` tables.
+Missing declared tables emit candidate-invalid. The migration oracle now lets
+unknown database/application exceptions propagate.
 Framed mode accepts Rails migration logging without redirecting or filtering it.
 The migration is enclosed in a rollback transaction; PostgreSQL sequences are
 not transactional, so controls should use disposable database copies.
@@ -171,11 +222,11 @@ docker exec dbreduce-adoption-pg17 psql -X -v ON_ERROR_STOP=1 \
   -U postgres -d mastodon_negative_control \
   -c "DELETE FROM settings WHERE var = 'landing_page'"
 docker exec -e DATABASE_URL=postgresql://postgres@dbreduce-adoption-pg17/mastodon_bug_control \
-  dbreduce-adoption-mastodon bundle exec rails runner /case/oracle.rb
+  dbreduce-adoption-mastodon bundle exec ruby /case/wrapper.rb
 docker exec -e DATABASE_URL=postgresql://postgres@dbreduce-adoption-pg17/mastodon_negative_control \
-  dbreduce-adoption-mastodon bundle exec rails runner /case/oracle.rb
+  dbreduce-adoption-mastodon bundle exec ruby /case/wrapper.rb
 docker exec -e DATABASE_URL=postgresql://postgres@dbreduce-adoption-pg17/mastodon_bug_control \
-  dbreduce-adoption-mastodon-fixed bundle exec rails runner /case/oracle.rb
+  dbreduce-adoption-mastodon-fixed bundle exec ruby /case/wrapper.rb
 ```
 
 ## DBReduce command
@@ -194,7 +245,7 @@ docker run --rm --network dbreduce-adoption \
   -v /var/run/docker.sock:/var/run/docker.sock \
   dbreduce-mastodon-tool reduce \
   --database postgresql://postgres@dbreduce-adoption-pg17/mastodon_case \
-  --oracle 'docker exec -e DATABASE_URL="$DATABASE_URL" dbreduce-adoption-mastodon bundle exec rails runner /case/oracle.rb' \
+  --oracle 'docker exec -e DATABASE_URL="$DATABASE_URL" dbreduce-adoption-mastodon bundle exec ruby /case/wrapper.rb' \
   --oracle-framed-json --confirm 2 --timeout 60 \
   --output /evidence/mastodon-data.min.sql \
   --report /evidence/mastodon-data.report.json
@@ -205,7 +256,7 @@ The equivalent command inside that tool environment is:
 ```bash
 dbreduce reduce \
   --database postgresql://postgres@dbreduce-adoption-pg17/mastodon_case \
-  --oracle 'docker exec -e DATABASE_URL="$DATABASE_URL" dbreduce-adoption-mastodon bundle exec rails runner /case/oracle.rb' \
+  --oracle 'docker exec -e DATABASE_URL="$DATABASE_URL" dbreduce-adoption-mastodon bundle exec ruby /case/wrapper.rb' \
   --oracle-framed-json --confirm 2 --timeout 60 \
   --output /evidence/mastodon-data.min.sql \
   --report /evidence/mastodon-data.report.json
@@ -262,9 +313,9 @@ restore_database=$(docker run --rm --user 0 -v "$case_dir:/evidence:ro" \
   -e 'puts JSON.parse(File.read(ARGV.fetch(0))).fetch("restore_database")' \
   /evidence/mastodon-data.report.json)
 docker exec -e DATABASE_URL="postgresql://postgres@dbreduce-adoption-pg17/$restore_database" \
-  dbreduce-adoption-mastodon bundle exec rails runner /case/oracle.rb
+  dbreduce-adoption-mastodon bundle exec ruby /case/wrapper.rb
 docker exec -e DATABASE_URL="postgresql://postgres@dbreduce-adoption-pg17/$restore_database" \
-  dbreduce-adoption-mastodon-fixed bundle exec rails runner /case/oracle.rb
+  dbreduce-adoption-mastodon-fixed bundle exec ruby /case/wrapper.rb
 ```
 
 To repeat the schema phase, run the tool-container reduction command against

@@ -13,7 +13,7 @@ import psycopg
 from psycopg import sql
 
 from dbreduce.models.schema import TableKey
-from dbreduce.oracle.runner import Oracle, OracleError
+from dbreduce.oracle.runner import Oracle, OracleError, OracleOutcome
 from dbreduce.performance import Performance
 from dbreduce.postgres.database import Workspace
 from dbreduce.postgres.dump import ClientError, dump
@@ -379,7 +379,9 @@ class SchemaReducer:
             return False
         if not accepted:
             outcome = self.oracle.last_outcome
-            self.outcomes["bug_disappeared" if outcome == "passed" else outcome] += 1
+            assert outcome is not None
+            key = "bug_disappeared" if outcome == OracleOutcome.NOT_REPRODUCED else outcome
+            self.outcomes[key] += 1
             return False
         self.accepted += 1
         self.outcomes["accepted"] += 1
@@ -404,6 +406,7 @@ class SchemaReducer:
                     for key in (
                         "bug_disappeared",
                         "different_failure",
+                        "candidate_invalid",
                         "invalid_schema",
                         "constraint_rejected",
                         "oracle_infrastructure_error",
@@ -414,11 +417,15 @@ class SchemaReducer:
                 "locally_irreducible": not any(
                     self.outcomes[key]
                     for key in (
+                        "candidate_invalid",
+                        "different_failure",
                         "invalid_schema",
                         "constraint_rejected",
                         "oracle_infrastructure_error",
                     )
                 ),
+                "blocked_by_candidate_invalid": bool(self.outcomes["candidate_invalid"]),
+                "infrastructure_errors": self.outcomes["oracle_infrastructure_error"],
                 "transformations": ["whole_table_removal"],
             },
             "cache": "disabled",

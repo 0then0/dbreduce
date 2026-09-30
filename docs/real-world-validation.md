@@ -1,5 +1,95 @@
 # Real-world validation
 
+## v0.5 candidate validity validation (2026-09-30)
+
+Local v0.5.0 source checks and both application reruns completed. The release is
+not published yet; the results below are local validations, not a new GitHub CI run.
+No new DBMS, schema primitive, framework package or runtime dependency was added.
+
+The [structured protocol](candidate-invalid.md) adds only explicit
+`{"reproduced":false,"outcome":"candidate_invalid"}`. Old positive/negative JSON
+and framed verdicts remain supported. Contradictory/unknown outcomes fail closed;
+nonzero exit status remains an infrastructure failure. The typed internal outcome
+keeps target-negative, different-failure, application-invalid and infrastructure
+results distinct. Invalid restore retains its existing separate schema counters.
+Early rejection, exact-state cached rejection and cumulative minimality barriers
+are documented in that contract. Fresh final confirmation is still mandatory.
+
+### Application reruns
+
+Both runs reused preserved, independently restored data-only SQL with the full
+original schema, avoiding repetition of the already validated data reduction:
+
+- [NetBox #17498](cases/netbox-17498.md#candidate-validity-validation-v050-source-2026-09-30):
+  83 schema probes, 13 accepted, 70 explicit candidate-invalid, zero infrastructure
+  errors. Historical v0.4 protocol reported 70 infrastructure errors. The same
+  four tables/two rows remain; schema elapsed was 243.250s, total 284.590s,
+  105 oracle executions. Each invalid verdict came from an explicit missing-table
+  precondition query before Django setup, not analysis of an old exception.
+- [Mastodon #37059](cases/mastodon-37059.md#candidate-validity-validation-v050-source-2026-09-30):
+  601 schema probes, 27 accepted, 26 candidate-invalid, 524 invalid restores and
+  24 unresolved infrastructure errors. Historical v0.4.1 reported 26 negative
+  verdicts and 24 infrastructure errors. The new invalid verdicts replace those
+  negative missing-`settings` verdicts; the 24 unknown errors remain errors.
+  The same 12 tables/two rows and exact identity remain; schema elapsed was
+  584.482s, total 618.422s, 111 oracle executions.
+
+Both final SQL files passed separate unmodified native PG17 restores and their
+real application oracles. Separate missing-required-table, target-negative and
+unreachable-database controls passed for both wrappers. Fixed Mastodon v4.5.3
+returned a negative verdict on the final reproducer. This validation does not
+claim that all infrastructure errors were eliminated or that v0.5 is faster.
+Wrappers only cover their declared case-specific table invariants.
+
+### Checks actually run
+
+Using the existing environments, with `PYTHONPATH` pointing at the edited source:
+
+```bash
+python -m pytest -q -m 'not postgres'
+python -m mypy src
+python -m ruff check .
+```
+
+All three commands passed on each of Python 3.10, 3.11, 3.12, 3.13 and 3.14;
+100 non-PostgreSQL tests passed per interpreter. In disposable Docker services,
+matching native PostgreSQL clients and the existing Linux environments ran:
+
+```bash
+DBREDUCE_TEST_ADMIN=postgresql://postgres@case-server/postgres \
+  python -m pytest -q -m postgres
+```
+
+All 49 PostgreSQL tests passed in each existing CI pairing: PG15/Python 3.10,
+PG16/Python 3.12, PG17/Python 3.13 and PG18/Python 3.14. This includes schema/data
+candidate-invalid for snapshot/clone, fresh restore, source preservation,
+`BUG_A`/`BUG_B`, oracle-write isolation, ownership and cleanup regressions.
+Protocol tests cover strict/framed compatibility, invalid fields, multiple verdicts,
+exit status, early rejection and final-invalid publication prevention.
+The negative cache test verifies retained rejection/barrier for an identical exact
+state, and a fresh lookup when sequence state changes.
+
+`uv lock --check`, `uv build`, extracted-wheel `python -m dbreduce --help`,
+wheel version/Python metadata checks, Ruby syntax checks for both Mastodon scripts,
+and `git diff --check` passed. The existing Python/PG CI matrix was left unchanged;
+remote CI and PyPI publication have not been run for this local work.
+
+### Limits and release status
+
+Candidate-invalid does not prove an object necessary for the target failure.
+Minimality barriers are cumulative and conservative. Early rejection cannot
+observe later contradictory verdicts; per-run cache correctness still assumes
+oracle determinism. The core does not infer validity from exceptions, stderr or
+legacy matchers. Unknown application defects, services, credentials, timeouts
+and protocol errors remain unresolved infrastructure failures.
+
+Version metadata and release documentation are prepared for v0.5.0; the changelog
+is marked Unreleased. Issue #1's external update is conditional on publishing
+v0.5.0, as requested. No Git commit, tag, push or release was created. After this
+milestone the project returns to maintenance/external-feedback mode; no v0.6
+features are started.
+
+
 ## Ruby/Rails validation and regression checks
 
 On 2026-09-29, the source version prepared for v0.4.1 validated

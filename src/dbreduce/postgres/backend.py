@@ -1,4 +1,5 @@
 import uuid
+from collections import Counter
 from collections.abc import Callable
 from pathlib import Path
 
@@ -32,6 +33,7 @@ class PostgresBackend:
         self.oracle = oracle
         self.cache = cache
         self.performance = performance or Performance()
+        self.outcomes: Counter[str] = Counter()
         self.probes = 0
         self.accepted = 0
         self.constraint_rejections = 0
@@ -89,6 +91,8 @@ class PostgresBackend:
             accepted = self.oracle.fails(
                 self.workspace.url, lambda: self.workspace.reset(candidate_dump)
             )
+            assert self.oracle.last_outcome is not None
+            self.outcomes[self.oracle.last_outcome] += 1
             self.cache.results[key] = accepted
             self.progress(f"candidate: {self.oracle.last_outcome}")
         else:
@@ -120,6 +124,7 @@ class CloneBackend:
         self.oracle = oracle
         self.performance = performance
         self.progress = progress
+        self.outcomes: Counter[str] = Counter()
         self.probes = 0
         self.accepted = 0
         self.constraint_rejections = 0
@@ -183,6 +188,8 @@ class CloneBackend:
                     oracle_db = None
 
             accepted = self.oracle.fails("", prepare, cleanup)
+            assert self.oracle.last_outcome is not None
+            self.outcomes[self.oracle.last_outcome] += 1
             self.progress(f"candidate: {self.oracle.last_outcome}")
             if accepted:
                 old = self.accepted_db

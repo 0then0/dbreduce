@@ -349,6 +349,13 @@ def reduce_command(
                     "filesystem_reflink_verified": False,
                     "restore_jobs": restore_jobs,
                 }
+                data_minimality: dict[str, object] = {
+                    "locally_irreducible": not any(
+                        backend.outcomes[key] for key in ("candidate_invalid", "different_failure")
+                    ),
+                }
+                if backend.outcomes["candidate_invalid"]:
+                    data_minimality["blocked_by_candidate_invalid"] = True
                 final_rows = sum(map(len, final.values()))
                 result = {
                     "dbreduce_version": __version__,
@@ -363,6 +370,7 @@ def reduce_command(
                         "created": backend.probes,
                         "accepted": backend.accepted,
                         "rejected": backend.probes - backend.accepted,
+                        "candidate_invalid": backend.outcomes["candidate_invalid"],
                     },
                     "cache_stats": {
                         "policy": "exact_fingerprint" if store is None else "disabled",
@@ -426,11 +434,15 @@ def reduce_command(
                     "oracle": "FAIL",
                     "restore_database": workspace.name,
                 }
+                schema_locally_irreducible = True
                 if schema_reducer is not None:
                     schema_report = schema_reducer.report()
+                    schema_minimality = schema_report["minimality"]
+                    assert isinstance(schema_minimality, dict)
+                    schema_locally_irreducible = schema_minimality["locally_irreducible"]
                     result["schema_reduction"] = schema_report
                     result["minimality_by_phase"] = {
-                        "data": {"locally_irreducible": True},
+                        "data": data_minimality,
                         "schema": schema_report["minimality"],
                     }
                     result["initial_sql_bytes"] = initial_sql_bytes
@@ -439,6 +451,10 @@ def reduce_command(
                     transformations = result["transformations"]
                     assert isinstance(transformations, list)
                     result["transformations"] = [*transformations, "whole_table_removal"]
+                elif not data_minimality["locally_irreducible"]:
+                    result["minimality_by_phase"] = {"data": data_minimality}
+                if not data_minimality["locally_irreducible"] or not schema_locally_irreducible:
+                    result["minimality"] = "local irreducibility not established"
                 result["database_stats"] = {
                     "clone_attempts": store.clone_attempts if store is not None else 0,
                     "clone_failures": store.clone_failures if store is not None else 0,
