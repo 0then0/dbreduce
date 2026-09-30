@@ -56,9 +56,12 @@ docker exec -w /opt/netbox/netbox -e PYTHONPATH=/opt/netbox/netbox \
 ```
 
 Keep generated `SECRET_KEY` and Redis/database settings in the application's
-external environment. The wrapper sets all NetBox `DB_*` fields from the established preflight
-connection, including resolved defaults and credentials, overriding inherited
-application connection settings and execs the real form oracle. It is a case example, not a framework SDK.
+external environment. The wrapper sets all NetBox `DB_*` fields from the
+established preflight connection, including resolved defaults and credentials,
+overriding inherited application connection settings and execs the real form
+oracle. This forwarding correction was covered by four regression tests after
+the application run above; the full run was not repeated afterward.
+It is a case example, not a framework SDK.
 
 
 ## Opt-in schema validation (v0.4.0)

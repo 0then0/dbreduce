@@ -15,6 +15,10 @@ Before reducing, verify both controls: the oracle identifies the target bug on
 its triggering state, and returns `reproduced: false` when that state is removed
 or the application is fixed. Prefer `--oracle-json` or `--oracle-framed-json` with
 a stable signature. An unrelated startup failure is not the target bug.
+With v0.5.0, a structured oracle may explicitly return
+`{"reproduced":false,"outcome":"candidate_invalid"}` for a known violated
+application precondition. Unknown failures must remain errors. See the
+[candidate-validity contract](docs/candidate-invalid.md).
 
 For an independent usage report or blocker, [open an issue](https://github.com/0then0/dbreduce/issues/new)
 with:
@@ -22,6 +26,8 @@ with:
 - DBReduce, Python, application and framework versions; OS and installation command.
 - PostgreSQL server and native `pg_dump`, `pg_restore`, `psql` versions.
 - Backend, oracle mode, relevant CLI flags and the exact observable failure.
+- Candidate-invalid counts and the declared preconditions used to classify them,
+  separately from negative verdicts and infrastructure errors.
 - A small shareable reproducer, or the report's counts and sanitized error message.
 - Whether the exported SQL reproduces the same identity after a fresh restore.
 

@@ -14,6 +14,8 @@ dbreduce --help
 ```
 
 DBReduce v0.5.0 requires Python 3.10 or newer and is tested on Python 3.10–3.14.
+See the [v0.5.0 release](https://github.com/0then0/dbreduce/releases/tag/v0.5.0)
+and [changelog](../CHANGELOG.md) for the candidate-validity protocol extension.
 The tested PostgreSQL range is 15–18, separately verified
 for snapshot, clone, schema reduction and final logical restore.
 See [the compatibility decision record](compatibility.md).

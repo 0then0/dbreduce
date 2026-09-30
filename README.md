@@ -114,10 +114,11 @@ Failure identity: preserved
 Fresh SQL restore: PASS
 ```
 
-Seventy NetBox schema candidates exited before the structured oracle verdict;
-the NetBox report therefore does not claim local irreducibility. NetBox
-validation exercised its form path, not a full HTTP flow. Earlier v0.2/v0.3
-data-only results remain documented in the case reports.
+The v0.5.0 NetBox rerun explicitly classified 70 schema candidates as
+`candidate_invalid` through declared table preconditions, with zero infrastructure
+errors. It retained the same four tables and two rows. These validity barriers
+prevent a claim of local irreducibility. NetBox validation exercised its form
+path, not a full HTTP flow. Earlier results remain documented in the case reports.
 
 See the [real-world validation report](docs/real-world-validation.md) and
 [case studies](docs/cases/) for commands, environment, performance numbers, and
@@ -133,12 +134,13 @@ the validated oracle command is:
 ```bash
 dbreduce reduce \
   --database postgresql://postgres@dbreduce-adoption-pg17/mastodon_case \
-  --oracle 'docker exec -e DATABASE_URL="$DATABASE_URL" dbreduce-adoption-mastodon bundle exec rails runner /case/oracle.rb' \
+  --oracle 'docker exec -e DATABASE_URL="$DATABASE_URL" dbreduce-adoption-mastodon bundle exec ruby /case/wrapper.rb' \
   --oracle-framed-json --confirm 2 --timeout 60
 ```
 
-DBReduce runs separately from Rails. The case records 24 schema-phase oracle
-infrastructure errors and does not claim schema local irreducibility.
+DBReduce runs separately from Rails. The v0.5.0 case records 26 explicitly invalid
+schema candidates, 524 invalid restores and 24 unresolved oracle infrastructure
+errors; it does not claim schema local irreducibility.
 
 See [CHANGELOG.md](CHANGELOG.md) for release history.
 

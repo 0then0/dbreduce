@@ -1,5 +1,10 @@
 # Benchmark
 
+The measurements below are historical v0.2–v0.4.1 runs. The v0.5.0
+candidate-validity reruns and outcome distributions are recorded in the
+[real-world validation report](real-world-validation.md#v05-candidate-validity-validation-2026-09-30).
+They are single validations, not evidence of a performance improvement.
+
 ## v0.4.0 and v0.4.1 comparison
 
 On 2026-09-29, published v0.4.0 and the source version prepared for v0.4.1 ran sequentially

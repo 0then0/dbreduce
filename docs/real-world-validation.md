@@ -2,8 +2,10 @@
 
 ## v0.5 candidate validity validation (2026-09-30)
 
-Local v0.5.0 source checks and both application reruns completed. The release is
-not published yet; the results below are local validations, not a new GitHub CI run.
+Local v0.5.0 source checks and both application reruns completed. The
+[GitHub CI run](https://github.com/0then0/dbreduce/actions/runs/36694211296)
+also passed the complete Python/PostgreSQL matrix for commit `2e93f22`.
+The application measurements below are local validations, separate from CI.
 No new DBMS, schema primitive, framework package or runtime dependency was added.
 
 The [structured protocol](candidate-invalid.md) adds only explicit
@@ -72,7 +74,13 @@ state, and a fresh lookup when sequence state changes.
 `uv lock --check`, `uv build`, extracted-wheel `python -m dbreduce --help`,
 wheel version/Python metadata checks, Ruby syntax checks for both Mastodon scripts,
 and `git diff --check` passed. The existing Python/PG CI matrix was left unchanged;
-remote CI and PyPI publication have not been run for this local work.
+the subsequent GitHub CI run passed all five Python and four PostgreSQL jobs,
+including wheel build, standalone installation and ephemeral execution.
+After review, four NetBox wrapper regressions brought the non-PostgreSQL suite
+to 104 tests. The wrapper now forwards all five effective `DB_*` parameters,
+including libpq defaults, rather than retaining inherited application settings.
+Those targeted regressions passed; the full application measurements above
+precede that correction and were not repeated afterward.
 
 ### Limits and release status
 
@@ -83,11 +91,12 @@ oracle determinism. The core does not infer validity from exceptions, stderr or
 legacy matchers. Unknown application defects, services, credentials, timeouts
 and protocol errors remain unresolved infrastructure failures.
 
-Version metadata and release documentation are prepared for v0.5.0; the changelog
-is marked Unreleased. Issue #1's external update is conditional on publishing
-v0.5.0, as requested. No Git commit, tag, push or release was created. After this
-milestone the project returns to maintenance/external-feedback mode; no v0.6
-features are started.
+The [v0.5.0 release](https://github.com/0then0/dbreduce/releases/tag/v0.5.0)
+is dated 2026-09-30 in the changelog. The tag-triggered workflow repeats both
+test matrices before creating the GitHub release and publishing to PyPI.
+[Issue #1](https://github.com/0then0/dbreduce/issues/1) remains open for adoption
+feedback on the current version. After this milestone the project returns to
+maintenance/external-feedback mode; no v0.6 features are started.
 
 
 ## Ruby/Rails validation and regression checks

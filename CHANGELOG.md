@@ -2,7 +2,7 @@
 
 Notable user-facing changes.
 
-## [0.5.0] - Unreleased
+## [0.5.0] - 2026-09-30
 
 - Extend strict/framed structured verdicts with explicit `candidate_invalid`,
   rejecting contradictory/unknown outcomes without inferring validity from output.
@@ -12,6 +12,8 @@ Notable user-facing changes.
   claims; preserve confirmation, exact-state cache and fresh final restore policies.
 - Add case-specific pre-boot Mastodon/NetBox wrappers and protocol/integration
   regressions. No framework integrations or additional schema primitives.
+- Preserve Python 3.10–3.14 and PostgreSQL 15–18 compatibility, verified by the
+  complete CI matrix, wheel installation and fresh-restore tests.
 
 ## [0.4.1] - 2026-09-29
 

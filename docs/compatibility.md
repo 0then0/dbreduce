@@ -1,27 +1,30 @@
 # Compatibility
 
 This page describes supported versions, the reasons for their requirements, and
-the checks performed on 2026-09-29 for DBReduce v0.4.1. This maintenance release
-expands Python and PostgreSQL compatibility without adding reducer primitives.
+the checks performed on 2026-09-30 for DBReduce v0.5.0. This release retains the
+Python and PostgreSQL compatibility established in v0.4.1 and adds explicit
+candidate validity without new reducer primitives.
 
 ## Python
 
-DBReduce v0.4.1 requires **Python 3.10 or newer**. Each version below passed
-73 non-PostgreSQL tests, mypy, Ruff and `dbreduce --help` using the listed interpreter:
+DBReduce v0.5.0 requires **Python 3.10 or newer**. Each Python version below passed
+the 104 non-PostgreSQL tests, mypy, Ruff, wheel/sdist builds, standalone wheel
+installation and `dbreduce --help` in the
+[v0.5 CI matrix](https://github.com/0then0/dbreduce/actions/runs/36694211296):
 
-| Python | Interpreter | Unit/type/lint/CLI | Wheel build/tool install/uvx |
-| ------ | ----------- | ------------------ | ---------------------------- |
-| 3.10   | 3.10.21     | PASS               | PASS                         |
-| 3.11   | 3.11.16     | PASS               | PASS                         |
-| 3.12   | 3.12.14     | PASS               | PASS                         |
-| 3.13   | 3.13.15     | PASS               | PASS                         |
-| 3.14   | 3.14.7      | PASS               | PASS                         |
+| Python | Unit/type/lint/CLI | Wheel build/tool install/uvx |
+| ------ | ----------------- | --------------------------- |
+| 3.10   | PASS              | PASS                        |
+| 3.11   | PASS              | PASS                        |
+| 3.12   | PASS              | PASS                        |
+| 3.13   | PASS              | PASS                        |
+| 3.14   | PASS              | PASS                        |
 
-The local checks used macOS arm64; PostgreSQL tests additionally used Linux
-arm64. The [GitHub Actions matrix](https://github.com/0then0/dbreduce/actions/runs/36627834096)
-passed Python 3.10–3.14 and PostgreSQL 15–18 on Ubuntu before release. The wheel declares
-`Requires-Python: >=3.10`; a separate Python 3.10 environment successfully ran
-`python -m pip install <wheel>` and its installed CLI.
+Local source checks used macOS arm64; PostgreSQL tests additionally used Linux
+arm64. GitHub Actions passed Python 3.10–3.14 and PostgreSQL 15–18 on Ubuntu.
+The wheel declares `Requires-Python: >=3.10`. The v0.4.1 compatibility validation
+also checked `python -m pip install <wheel>` and its installed CLI in a separate
+Python 3.10 environment; the installation requirements remain unchanged.
 
 ### Why Python 3.10 is the minimum
 
@@ -70,7 +73,7 @@ The real servers/clients were 15.19, 16.15, 17.11 and 18.6. Native binaries were
 selected from `/usr/lib/postgresql/<major>/bin`; no dump/restore wrapper changed
 file behavior. Both clone strategies exercise failure identity, oracle-write
 isolation, ownership verification, cleanup and final restore in the integration
-suite. All 45 PostgreSQL tests passed on each of the four server/client majors,
+suite. All 49 PostgreSQL tests passed on each of the four server/client majors,
 with no skips. Source-preservation and schema-candidate tests also pass.
 
 DBReduce v0.4.0 restricted clone mode to PostgreSQL 17 or newer. Version 0.4.1
@@ -152,8 +155,9 @@ The workflow separates five Python unit/type/lint/install jobs from four
 PostgreSQL integration jobs (PG15/Python 3.10, PG16/3.12, PG17/3.13, PG18/3.14),
 not a 5×4 cross product. Each PostgreSQL job checks all three native client major
 versions, server major, privileged test role and `--restrict-key` availability.
-The release job depends on both matrices. The tables above report local test
-results. GitHub Actions results are available on the repository's
+The release job depends on both matrices. The tables above summarize v0.5.0
+validation; the candidate-validity, oracle-write isolation and final confirmation
+regressions are included. GitHub Actions results are available on the repository's
 [Actions page](https://github.com/0then0/dbreduce/actions/workflows/tests.yml).
 
 `uv tool install dbreduce`, the installed `dbreduce --help`, and
