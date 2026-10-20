@@ -21,7 +21,7 @@ Issues = "https://github.com/0then0/dbreduce/issues"
 dbreduce = "dbreduce.cli:app"
 
 [dependency-groups]
-dev = ["pytest>=8,<10", "ruff>=0.12,<1", "mypy>=1.16,<2"]
+dev = ["pytest>=8,<10", "ruff>=0.12,<1", "mypy>=1.16,<3"]
 
 [tool.ruff]
 target-version = "py310"
