@@ -160,4 +160,11 @@ See [CHANGELOG.md](CHANGELOG.md) for release history.
 - [Issues](https://github.com/0then0/dbreduce/issues)
 - [PyPI](https://pypi.org/project/dbreduce/)
 
+## Contributing and reporting
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for local setup, checks and contribution
+guidance. Use the issue templates for bugs and feature requests. Project spaces
+follow the [code of conduct](CODE_OF_CONDUCT.md). Report suspected vulnerabilities
+using the private reporting instructions in [SECURITY.md](SECURITY.md).
+
 Licensed under [Apache-2.0](LICENSE).

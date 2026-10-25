@@ -16,6 +16,7 @@ permissions:
 jobs:
   python:
     runs-on: ubuntu-24.04
+    timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
@@ -40,6 +41,7 @@ jobs:
 
   postgres:
     runs-on: ubuntu-24.04
+    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
@@ -104,6 +106,7 @@ jobs:
       (github.event_name == 'workflow_dispatch' && startsWith(inputs.release_tag, 'v'))
     needs: [python, postgres]
     runs-on: ubuntu-24.04
+    timeout-minutes: 15
     permissions:
       contents: write
     steps:
@@ -164,6 +167,7 @@ jobs:
   publish:
     needs: release
     runs-on: ubuntu-24.04
+    timeout-minutes: 10
     environment:
       name: pypi
       url: https://pypi.org/project/dbreduce/

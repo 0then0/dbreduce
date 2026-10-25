@@ -1,4 +1,9 @@
-# Trying DBReduce and reporting failures
+# Contributing to DBReduce
+
+Follow the [code of conduct](CODE_OF_CONDUCT.md). Report suspected vulnerabilities
+through [SECURITY.md](SECURITY.md), rather than a public bug report.
+
+## Trying DBReduce and reporting failures
 
 Install DBReduce as a separate CLI with `uv tool install dbreduce` or
 `python -m pip install dbreduce`. It does not belong in your application's
@@ -40,3 +45,46 @@ reduction, performance, documentation or unsupported PostgreSQL features in
 [usage reports](docs/adoption.md). When contributing a change, describe the
 application behavior it addresses and run the relevant checks in
 [the development guide](docs/guide.md#development).
+
+## Local development
+
+Use Python 3.10 or newer and the committed `uv.lock`:
+
+```bash
+git clone https://github.com/0then0/dbreduce.git
+cd dbreduce
+uv sync --locked --dev
+uv run --locked pytest -q -m 'not postgres'
+uv run --locked ruff check .
+uv run --locked mypy src
+```
+
+PostgreSQL integration tests create and drop disposable databases. Use a dedicated
+local server and matching-major native clients; the full CI suite requires a
+superuser test role. Never point these tests at a shared or production server.
+
+```bash
+DBREDUCE_TEST_ADMIN=postgresql://localhost/postgres uv run --locked pytest -q -m postgres
+```
+
+The existing CI matrix tests Python 3.10–3.14 and PostgreSQL 15–18, builds wheel
+and source distributions, and checks standalone installation. Release publication
+runs only for version tags or an explicit release workflow dispatch.
+
+## Pull requests
+
+Keep changes focused and match existing conventions. `.editorconfig` defines
+whitespace; Ruff checks Python imports and style with a 100-character line limit.
+Add a test for changed behavior or a credible regression and run the relevant
+checks above. Do not weaken failure identity, source safety, ownership checks or
+oracle-write isolation to make a test pass.
+
+Explain behavior and compatibility changes in the PR template. Update relevant
+documentation and add notable user-facing changes under `Unreleased` in
+[CHANGELOG.md](CHANGELOG.md); do not rewrite published release entries or bump
+the version for an ordinary PR. Use English Conventional Commit messages such as
+`fix: reject contradictory oracle verdicts`.
+
+Dependabot checks Python and GitHub Actions dependencies monthly, groups updates
+per ecosystem, limits open version-update PRs to one per ecosystem, and waits seven
+days before proposing newly released versions. Review and CI are still required.

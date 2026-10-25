@@ -1,0 +1,23 @@
+name: Feature request
+description: Describe a concrete limitation and the behavior you need.
+title: "[Feature]: "
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem or use case
+      description: Describe the application workflow, current limitation and impact.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed behavior
+      description: Describe the smallest change that would address the problem.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives and compatibility
+      description: Include workarounds and any effects on CLI, oracle or report compatibility.

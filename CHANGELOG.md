@@ -2,6 +2,12 @@
 
 Notable user-facing changes.
 
+## [Unreleased]
+
+- Add repository editing/Git defaults, contribution and security policies, and
+  issue/PR templates; document local checks and dependency-update cadence.
+- Bound CI job runtimes while retaining the existing test and release matrices.
+
 ## [0.5.0] - 2026-09-30
 
 - Extend strict/framed structured verdicts with explicit `candidate_invalid`,
