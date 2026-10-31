@@ -133,7 +133,7 @@ def process_alive(pid: int) -> bool:
         return False
     try:  # the process may vanish between the checks
         return Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()[0] != "Z"
-    except FileNotFoundError:
+    except (FileNotFoundError, ProcessLookupError):
         return not Path("/proc/self/stat").exists()  # no /proc at all: kill(0) already said alive
 
 
