@@ -2,8 +2,10 @@ import json
 import os
 import re
 import shutil
+import signal
 import tempfile
 import time
+from collections.abc import Callable
 from contextlib import ExitStack
 from pathlib import Path
 from typing import Annotated
@@ -13,6 +15,7 @@ import typer
 
 from dbreduce import __version__
 from dbreduce.cache.store import Cache
+from dbreduce.cancellation import Leftover, RunControl, current, describe_leftovers
 from dbreduce.graph.dependencies import components, dependencies
 from dbreduce.oracle.runner import Oracle
 from dbreduce.performance import Performance
@@ -36,7 +39,11 @@ app = typer.Typer(
 
 
 def publish_result(exported: Path, output: Path, report: Path, result: dict[str, object]) -> None:
-    """Prepare both files, then publish without overwriting existing paths."""
+    """Prepare both files, then publish without overwriting existing paths.
+
+    Cancellation before the second link rolls the first back. After both links exist the
+    result is published and a later signal no longer cancels the run.
+    """
     pending: list[Path] = []
     created: list[Path] = []
     try:
@@ -59,13 +66,82 @@ def publish_result(exported: Path, output: Path, report: Path, result: dict[str,
         for prepared_path, destination in zip(pending, (output, report), strict=True):
             os.link(prepared_path, destination)
             created.append(destination)
+        current().commit()
     except BaseException:
-        for path in created:
-            path.unlink(missing_ok=True)
+        with current().protected():
+            for path in created:
+                path.unlink(missing_ok=True)
         raise
     finally:
-        for path in pending:
-            path.unlink(missing_ok=True)
+        with current().protected():
+            for path in pending:
+                path.unlink(missing_ok=True)
+
+
+def error_summaries(error: BaseException) -> list[str]:
+    """Distinct messages along an exception chain, without database error details."""
+    summaries: list[str] = []
+    seen: set[int] = set()
+    current_error: BaseException | None = error
+    while current_error is not None and id(current_error) not in seen:
+        seen.add(id(current_error))
+        if not isinstance(current_error, KeyboardInterrupt):
+            message = (
+                "PostgreSQL operation failed; check connection and permissions"
+                if isinstance(current_error, psycopg.Error)
+                else str(current_error) or type(current_error).__name__
+            )
+            if message not in summaries:
+                summaries.append(message)
+        current_error = current_error.__cause__ or current_error.__context__
+    return summaries
+
+
+def directory_leftovers(path: Path) -> Callable[[], list[Leftover]]:
+    def leftovers() -> list[Leftover]:
+        if not path.exists():
+            return []
+        return [
+            Leftover(
+                "directory",
+                str(path),
+                "not removed",
+                "It may hold a full copy of the source data. Delete it once no dbreduce "
+                "process is running.",
+            )
+        ]
+
+    return leftovers
+
+
+def report_cancellation(
+    control: RunControl, error: BaseException, started: float, temporary: Path | None
+) -> int:
+    """Print what happened after a cancelling signal and return the exit status."""
+
+    def say(message: str) -> None:
+        typer.echo(message, err=True)
+
+    say(
+        f"Cancelled by {control.signal_name} after {time.monotonic() - started:.1f} s. "
+        "No reduction result was published."
+    )
+    for message in error_summaries(error):
+        say(f"  detail: {message}")
+    leftovers = control.leftovers()
+    confirmed = [f"{count} database(s) {state}" for state, count in control.cleaned.items()]
+    if temporary is not None and not temporary.exists():
+        confirmed.append("temporary directory removed")
+    if confirmed:
+        say("Confirmed after cancellation: " + ", ".join(confirmed) + ".")
+    if not leftovers:
+        say("Cleanup complete: no resource owned by this run remains.")
+        return 128 + int(control.requested or signal.SIGTERM)
+    say("Cleanup is NOT complete. These resources owned by this run may remain:")
+    for line in describe_leftovers(leftovers):
+        say(line)
+    say("DBReduce does not remove databases by name prefix; check each one listed above.")
+    return 1
 
 
 def require_clients() -> None:
@@ -159,7 +235,10 @@ def reduce_command(
     """Reduce a source database or dump; export SQL and a JSON report."""
     started = time.monotonic()
     performance = Performance()
+    control = RunControl()
+    temporary_path: Path | None = None
     try:
+        control.start()
         if (database is None) == (input_dump is None) or database == "":
             raise ValueError("Provide exactly one of --database or --dump")
         admin = admin_database or database
@@ -197,7 +276,17 @@ def reduce_command(
                     err=True,
                 )
         require_clients()
+        if candidate_backend == "clone":
+            # Fail before any dump or restore on servers without CREATE DATABASE ... STRATEGY.
+            with psycopg.connect(admin, connect_timeout=10) as conn:
+                if conn.info.server_version < 150000:
+                    raise ValueError(
+                        "Clone backend requires PostgreSQL 15 or later; "
+                        "use --candidate-backend snapshot"
+                    )
         with tempfile.TemporaryDirectory(prefix="dbreduce-") as temporary:
+            temporary_path = Path(temporary)
+            control.register(directory_leftovers(temporary_path))
             snapshot = Path(temporary) / "accepted.dump"
             if database:
                 with psycopg.connect(database, connect_timeout=10) as conn:
@@ -461,6 +550,8 @@ def reduce_command(
                     "fallbacks": 0,
                     "created": workspace.databases_created + (store.created if store else 0),
                     "dropped": workspace.databases_dropped + (store.dropped if store else 0),
+                    "already_absent": workspace.databases_absent
+                    + (store.already_absent if store else 0),
                     "cleanup_failures": workspace.cleanup_failures
                     + (store.cleanup_failures if store else 0),
                 }
@@ -468,6 +559,9 @@ def reduce_command(
             assert isinstance(database_stats, dict)
             database_stats["dropped"] = workspace.databases_dropped + (
                 store.dropped if store is not None else 0
+            )
+            database_stats["already_absent"] = workspace.databases_absent + (
+                store.already_absent if store is not None else 0
             )
             database_stats["cleanup_failures"] = workspace.cleanup_failures + (
                 store.cleanup_failures if store is not None else 0
@@ -482,5 +576,18 @@ def reduce_command(
                 f"Final: {final_rows} rows, oracle: FAIL, "
                 f"executions: {runner.executions}, cache hits: {cache.hits}"
             )
-    except (OSError, ValueError, re.error, RuntimeError, psycopg.Error) as error:
-        fail(error)
+        if control.cancelled:
+            typer.echo(
+                f"Note: {control.signal_name} arrived after the result was published; "
+                "the published result was kept.",
+                err=True,
+            )
+    except BaseException as error:
+        control.finish()
+        if control.cancelled and not control.committed:
+            raise typer.Exit(report_cancellation(control, error, started, temporary_path)) from None
+        if isinstance(error, (OSError, ValueError, re.error, RuntimeError, psycopg.Error)):
+            fail(error)
+        raise
+    finally:
+        control.stop()

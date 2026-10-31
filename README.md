@@ -23,7 +23,8 @@ and explicitly configured application relationships.
 
 ## Quick start
 
-DBReduce v0.5.0 supports Python 3.10–3.14 and PostgreSQL 15–18. Use current patched,
+DBReduce supports Python 3.10–3.15 and PostgreSQL 13–18 (the experimental clone
+backend needs PostgreSQL 15 or later). Use current patched,
 matching-major `pg_dump`, `pg_restore` and `psql` tools; see the
 [compatibility report](docs/compatibility.md).
 
@@ -65,9 +66,10 @@ target-bug disappearance and infrastructure failures. See the
 [candidate-validity contract](docs/candidate-invalid.md) and guide for details.
 
 Use `--oracle-framed-json` when the application logs to stdout. Snapshot isolation
-is the default; `--candidate-backend clone` is an experimental alternative on
-PostgreSQL 15–18. Both `WAL_LOG` and `FILE_COPY` are tested; `file_copy_method`
-requires PostgreSQL 18. `--restore-jobs N` enables parallel archive restores.
+is the default and works on PostgreSQL 13–18; `--candidate-backend clone` is an
+experimental alternative on PostgreSQL 15–18. Both `WAL_LOG` and `FILE_COPY` are
+tested; `file_copy_method` requires PostgreSQL 18. `--restore-jobs N` enables parallel
+archive restores.
 
 Use `--reduce-schema` for opt-in whole-table schema reduction.
 It runs after row reduction, checks each proposed removal with

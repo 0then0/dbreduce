@@ -18,6 +18,7 @@ from dbreduce.performance import Performance
 from dbreduce.postgres.database import Workspace
 from dbreduce.postgres.dump import ClientError, dump
 from dbreduce.postgres.introspection import inspect_schema_counts
+from dbreduce.processes import run_owned
 from dbreduce.reducer.ddmin import chunks, sizes
 
 _KINDS = tuple(
@@ -86,12 +87,10 @@ class SchemaObject:
 
 def archive_objects(path: Path) -> tuple[bytes, list[SchemaObject]]:
     try:
-        result = subprocess.run(
+        result = run_owned(
             ["pg_restore", "--list", str(path)],
-            capture_output=True,
             timeout=600,
             env={**os.environ, "LC_ALL": "C"},
-            check=False,
         )
     except subprocess.TimeoutExpired as error:
         raise RuntimeError("Timed out reading archive object list") from error

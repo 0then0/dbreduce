@@ -6,6 +6,7 @@ from pathlib import Path
 import psycopg
 
 from dbreduce.cache.store import Cache, fingerprint
+from dbreduce.cancellation import current
 from dbreduce.models.schema import RowKey, Schema, State, TableKey
 from dbreduce.oracle.runner import Oracle
 from dbreduce.performance import Performance
@@ -47,6 +48,7 @@ class PostgresBackend:
         return self.current
 
     def attempt(self, table: TableKey, rows: list[RowKey]) -> bool:
+        current().checkpoint()
         self.probes += 1
         with self.performance.measure("accepted_restore"):
             self.workspace.reset(self.snapshot)
@@ -151,6 +153,7 @@ class CloneBackend:
         return self.oracle.fails("", prepare, cleanup)
 
     def attempt(self, table: TableKey, rows: list[RowKey]) -> bool:
+        current().checkpoint()
         self.probes += 1
         candidate_db = self.store.clone(self.accepted_db)
         promoted = False

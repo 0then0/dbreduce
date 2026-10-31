@@ -23,8 +23,10 @@ candidate itself is promoted; DBReduce does not replay the deletion.
 Before dropping a database, DBReduce verifies its generated name, OID, owner,
 and per-run marker. It does not use a name prefix as ownership proof or use
 `DROP DATABASE ... WITH (FORCE)` in clone mode. If safe cleanup fails, DBReduce
-reports the exact database for inspection. A hard process kill can leave owned
-databases behind; inspect ownership before manual cleanup.
+reports the exact database for inspection. SIGINT and SIGTERM run the same cleanup
+inside a [30-second shutdown budget](guide.md#cancellation-and-cleanup); a hard process
+kill (SIGKILL, container removal) can leave owned databases behind. Inspect ownership
+before manual cleanup.
 
 Clone preflight checks the live source before dumping and the owned initial
 database after restore. It rejects publications, subscriptions, logical

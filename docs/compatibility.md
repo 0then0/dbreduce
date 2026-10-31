@@ -5,6 +5,12 @@ the checks performed on 2026-09-30 for DBReduce v0.5.0. This release retains the
 Python and PostgreSQL compatibility established in v0.4.1 and adds explicit
 candidate validity without new reducer primitives.
 
+## Range in v0.5.1
+
+DBReduce v0.5.1 supports **Python 3.10–3.15** and **PostgreSQL 13–18**. The
+[v0.5.1 verification](#v051-verification) below extends the v0.5.0 results; the tables
+that follow remain the record of the v0.5.0 validation.
+
 ## Python
 
 DBReduce v0.5.0 requires **Python 3.10 or newer**. Each Python version below passed
@@ -83,14 +89,52 @@ Servers older than PG15 receive a version error before clone creation.
 `--file-copy-method` still requires PostgreSQL 18; explicit `copy` requests were
 rejected clearly on real PG15, PG16 and PG17 servers.
 
-PostgreSQL 14 is **unsupported by policy** for snapshot/schema, not claimed
-incompatible. No full snapshot/schema suite was run on 14. Its clone backend is
-**known incompatible**: PostgreSQL 14.24 rejects `CREATE DATABASE ... STRATEGY
-WAL_LOG` with `option "strategy" not recognized`, and DBReduce rejects it before
-creating a clone. PG14 is outside the tested support range and
-[reaches end of support on 2026-11-12](https://www.postgresql.org/support/versioning/).
-Snapshot mode does not reject PG14 solely on its version, but its
-behavior there has not been validated.
+Servers older than PostgreSQL 15 cannot use the clone backend: PostgreSQL 14.24
+rejects `CREATE DATABASE ... STRATEGY WAL_LOG` with `option "strategy" not
+recognized`. Since v0.5.1 DBReduce stops with a version error before any dump or
+restore when `--candidate-backend clone` meets such a server. Snapshot and schema
+reduction need no PostgreSQL 15 feature and are verified on 13 and 14 (see
+[v0.5.1 verification](#v051-verification)). PostgreSQL
+[13 is past end of support and 14 reaches it on 2026-11-12](https://www.postgresql.org/support/versioning/);
+use a patched release.
+
+## v0.5.1 verification
+
+Checked on 2026-10-31 on macOS arm64 (Python source checks) and Linux arm64 containers
+(PostgreSQL), with the committed `uv.lock`. GitHub Actions was not run for these
+results; the CI matrix was extended to the same combinations.
+
+Python 3.10, 3.11, 3.12, 3.13, 3.14 and 3.15 (3.15.2) each passed Ruff, mypy and the
+122 non-PostgreSQL tests (also with `DeprecationWarning` as an error), built the wheel
+and sdist once, and ran `dbreduce --help` from that wheel through
+`uvx --isolated --python <version>`. No source change was needed for 3.15; the locked
+psycopg-binary and Typer install and run on it. The wheel declares
+`Requires-Python: >=3.10` with no upper bound.
+
+PostgreSQL integration suite (`pytest -m postgres`) with native, matching-major clients:
+
+| Server and client | Result                      | Notes                                       |
+| ----------------- | --------------------------- | ------------------------------------------- |
+| 13.23             | 45 passed, 21 skipped       | snapshot, schema, final restore             |
+| 14.24             | 45 passed, 21 skipped       | snapshot, schema, final restore             |
+| 15.19             | 65 passed, 1 skipped        | adds clone WAL_LOG and FILE_COPY            |
+| 16.15             | 65 passed, 1 skipped        |                                             |
+| 17.11             | 65 passed, 1 skipped        |                                             |
+| 18.6              | 65 passed, 1 skipped        | `file_copy_method` is PostgreSQL 18 only    |
+
+The skips are deliberate: clone tests and the per-database ICU provider test need
+PostgreSQL 15, and the test that checks the clone version error needs a server older
+than 15. Everything else, including cancellation and cleanup, ran on all six majors,
+and no run left a `dbreduce_` database behind. The whole suite (167 passed, 21
+skipped) also passed on Python 3.15.2 with PostgreSQL 14.24. Only that pairing and the
+Python 3.11 container used for the other majors were executed here; other
+Python/PostgreSQL combinations rely on the CI matrix.
+
+PostgreSQL 13 and 14 have no `CREATE DATABASE ... STRATEGY`, per-database ICU locale
+providers or `file_copy_method`. Restoring an archive whose database uses the ICU provider
+into such a server fails with the server's own error. `pg_dump --restrict-key`, which
+snapshot fingerprinting needs, is present in the 13.23 and 14.24 clients used here; for 13 the
+first patched client version was not checked.
 
 ## PostgreSQL feature audit
 
@@ -151,9 +195,9 @@ Cross-major combinations were not added to the support matrix.
 
 ## CI and installation
 
-The workflow separates five Python unit/type/lint/install jobs from four
-PostgreSQL integration jobs (PG15/Python 3.10, PG16/3.12, PG17/3.13, PG18/3.14),
-not a 5×4 cross product. Each PostgreSQL job checks all three native client major
+The workflow separates six Python unit/type/lint/install jobs from six
+PostgreSQL integration jobs (PG13/Python 3.11, PG14/3.15, PG15/3.10, PG16/3.12,
+PG17/3.13, PG18/3.14), not a cross product. Each PostgreSQL job checks all three native client major
 versions, server major, privileged test role and `--restrict-key` availability.
 The release job depends on both matrices. The tables above summarize v0.5.0
 validation; the candidate-validity, oracle-write isolation and final confirmation

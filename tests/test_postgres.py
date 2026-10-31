@@ -179,6 +179,8 @@ def test_source_encoding_and_locale_are_copied(provider):
         pytest.skip("Set DBREDUCE_TEST_ADMIN")
     if provider == "i":
         with psycopg.connect(admin) as conn:
+            if conn.info.server_version < 150000:
+                pytest.skip("Per-database ICU locale providers require PostgreSQL 15")
             if not conn.execute(
                 "SELECT EXISTS (SELECT 1 FROM pg_collation WHERE collprovider='i')"
             ).fetchone()[0]:
@@ -201,6 +203,52 @@ def test_source_encoding_and_locale_are_copied(provider):
         with Workspace(admin, settings=discovered) as copy:
             copy.create()
             assert read_settings(copy.dsn) == discovered
+
+
+def test_candidate_backend_option_is_rejected_before_postgres_15(workspace, tmp_path):
+    from typer.testing import CliRunner
+
+    from dbreduce.cli import app
+
+    admin = os.environ["DBREDUCE_TEST_ADMIN"]
+    with psycopg.connect(admin) as conn:
+        if conn.info.server_version >= 150000:
+            pytest.skip("Only servers before PostgreSQL 15 reject the second backend")
+        before = {
+            row[0]
+            for row in conn.execute(
+                "SELECT datname FROM pg_database WHERE datname LIKE 'dbreduce%'"
+            )
+        }
+    with pytest.raises(ValueError, match="PostgreSQL 15 or later"):
+        CloneStore(admin, read_settings(workspace.dsn), Performance())
+    result = CliRunner().invoke(
+        app,
+        [
+            "reduce",
+            "--database",
+            workspace.dsn,
+            "--oracle",
+            "true",
+            "--candidate-backend",
+            "clone",
+            "--output",
+            str(tmp_path / "min.sql"),
+            "--report",
+            str(tmp_path / "report.json"),
+        ],
+    )
+    assert result.exit_code == 1
+    assert "PostgreSQL 15 or later" in result.output
+    assert not (tmp_path / "min.sql").exists()
+    with psycopg.connect(admin) as conn:  # the run dropped everything it created
+        after = {
+            row[0]
+            for row in conn.execute(
+                "SELECT datname FROM pg_database WHERE datname LIKE 'dbreduce%'"
+            )
+        }
+    assert after == before
 
 
 def test_archive_reduction_uses_archived_locale(tmp_path):
@@ -452,7 +500,6 @@ def test_disconnect_while_create_is_waiting_reports_unverified_database():
     cleanup_connecting = threading.Event()
     thread = None
     name_was_absent = False
-    observed_identity = None
 
     class CreatorConnection:
         def __enter__(self):
@@ -518,11 +565,6 @@ def test_disconnect_while_create_is_waiting_reports_unverified_database():
         assert errors and isinstance(errors[0], RuntimeError)
         assert workspace.name in str(errors[0])
         assert not workspace.created
-        with real_connect(admin) as observer:
-            observed_identity = observer.execute(
-                "SELECT oid, datdba FROM pg_database WHERE datname = %s",
-                (workspace.name,),
-            ).fetchone()
     finally:
         try:
             blocker.execute("ROLLBACK")
@@ -549,11 +591,14 @@ def test_disconnect_while_create_is_waiting_reports_unverified_database():
                     while cleanup.execute(active_create, (creator_pid, create_query)).fetchone()[0]:
                         assert time.monotonic() < deadline, "CREATE backend did not terminate"
                         time.sleep(0.05)
+                    # The name is random and was absent when the test began; the late CREATE
+                    # may finish after the identity was read, so drop it unless someone marked it.
                     current = cleanup.execute(
-                        "SELECT oid, datdba FROM pg_database WHERE datname = %s",
+                        "SELECT shobj_description(oid, 'pg_database') FROM pg_database "
+                        "WHERE datname = %s",
                         (workspace.name,),
                     ).fetchone()
-                    if observed_identity is not None and current == observed_identity:
+                    if current is not None and current[0] is None:
                         cleanup.execute(
                             sql.SQL("DROP DATABASE {}").format(sql.Identifier(workspace.name))
                         )

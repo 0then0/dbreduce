@@ -10,12 +10,18 @@ import psycopg
 from psycopg import sql
 from psycopg.conninfo import make_conninfo
 
+from dbreduce.cancellation import Leftover, current
 from dbreduce.models.schema import Schema, State
 from dbreduce.performance import Performance
 from dbreduce.postgres.database import (
+    CleanupResult,
+    CleanupStatus,
     DatabaseSettings,
     database_url,
+    drop_owned_database,
     initial_database_statement,
+    inspection_hint,
+    settle_unproven_create,
 )
 from dbreduce.postgres.dump import restore
 from dbreduce.postgres.rows import read_rows
@@ -79,8 +85,10 @@ class CloneStore:
         self.marker = "dbreduce-run:" + uuid.uuid4().hex
         self.owned: dict[str, OwnedDatabase] = {}
         self.unproven: set[str] = set()
+        self.last_cleanup: dict[str, CleanupResult] = {}
         self.created = 0
         self.dropped = 0
+        self.already_absent = 0
         self.clone_attempts = 0
         self.clone_failures = 0
         self.cleanup_failures = 0
@@ -97,6 +105,32 @@ class CloneStore:
         if file_copy_method is not None and self.server_file_copy_method is None:
             raise ValueError("file_copy_method requires PostgreSQL 18")
         self.clone_probe: str | None = None
+        current().register(self.leftovers)
+
+    def leftovers(self) -> list[Leftover]:
+        found = []
+        for database in list(self.owned.values()):  # the watchdog may call this concurrently
+            result = self.last_cleanup.get(database.name)
+            state = result.status.value if result is not None else "removal not attempted"
+            hint = inspection_hint(self.admin_dsn, database.name, self.marker)
+            found.append(
+                Leftover(
+                    "database",
+                    database.name,
+                    state,
+                    ". ".join(filter(None, (result.detail if result else "", hint))),
+                )
+            )
+        for name in sorted(self.unproven):
+            found.append(
+                Leftover(
+                    "database",
+                    name,
+                    "creation outcome unverified",
+                    inspection_hint(self.admin_dsn, name, None),
+                )
+            )
+        return found
 
     def probe_file_copy_clone(self) -> None:
         if self.strategy != "file_copy" or (
@@ -123,8 +157,13 @@ class CloneStore:
             if probe is not None:
                 self.drop(probe)
 
-    def _admin(self) -> psycopg.Connection[tuple[object, ...]]:
-        return psycopg.connect(self.admin_dsn, autocommit=True, connect_timeout=10)
+    def _admin(self, application_name: str | None = None) -> psycopg.Connection[tuple[object, ...]]:
+        return psycopg.connect(
+            self.admin_dsn,
+            autocommit=True,
+            connect_timeout=10,
+            application_name=application_name,
+        )
 
     def dsn(self, database: OwnedDatabase) -> str:
         return make_conninfo(self.admin_dsn, dbname=database.name)
@@ -140,7 +179,8 @@ class CloneStore:
         if clone:
             self.clone_attempts += 1
         try:
-            with self._admin() as conn:
+            # The session is named after the database so an unfinished CREATE can be found.
+            with self._admin(name) as conn:
                 conn.execute("SET statement_timeout = '600s'")
                 if self.requested_file_copy_method is not None:
                     conn.execute(
@@ -152,22 +192,24 @@ class CloneStore:
                 self.unproven.add(name)
                 with self.performance.measure("database_clone" if clone else "database_create"):
                     conn.execute(query)
-                row = conn.execute(
-                    "SELECT d.oid, d.datdba FROM pg_database d WHERE d.datname = %s",
-                    (name,),
-                ).fetchone()
-                if row is None:
-                    raise RuntimeError(f"Cannot verify created database {name}")
-                conn.execute(
-                    sql.SQL("COMMENT ON DATABASE {} IS {}").format(
-                        sql.Identifier(name), sql.Literal(self.marker)
+                # A signal must not split recording the database from marking it as ours.
+                with current().protected():
+                    row = conn.execute(
+                        "SELECT d.oid, d.datdba FROM pg_database d WHERE d.datname = %s",
+                        (name,),
+                    ).fetchone()
+                    if row is None:
+                        raise RuntimeError(f"Cannot verify created database {name}")
+                    conn.execute(
+                        sql.SQL("COMMENT ON DATABASE {} IS {}").format(
+                            sql.Identifier(name), sql.Literal(self.marker)
+                        )
                     )
-                )
-                database = OwnedDatabase(name, cast(int, row[0]), cast(int, row[1]))
-                self.owned[name] = database
-                self.unproven.remove(name)
-                self.created += 1
-                return database
+                    database = OwnedDatabase(name, cast(int, row[0]), cast(int, row[1]))
+                    self.owned[name] = database
+                    self.unproven.remove(name)
+                    self.created += 1
+                    return database
         except psycopg.errors.DuplicateDatabase:
             self.unproven.discard(name)
             if clone:
@@ -287,34 +329,55 @@ class CloneStore:
         )
 
     def drop(self, database: OwnedDatabase) -> None:
-        try:
-            self._verify(database)
-            with self._admin() as conn:
-                conn.execute("SET statement_timeout = '600s'")
-                with self.performance.measure("database_cleanup"):
-                    conn.execute(sql.SQL("DROP DATABASE {}").format(sql.Identifier(database.name)))
-        except RuntimeError:
+        if self.owned.get(database.name) is not database:
+            raise RuntimeError(f"Database {database.name} is not tracked by this run")
+        # Cancellation is delivered after the drop, never in the middle of it.
+        with current().protected():
+            result = drop_owned_database(
+                self.admin_dsn,
+                database.name,
+                oid=database.oid,
+                owner=database.owner,
+                marker=self.marker,
+                force=False,
+                lock_key=None,
+                performance=self.performance,
+            )
+        self.last_cleanup[database.name] = result
+        if not result.done:
             self.cleanup_failures += 1
-            raise
-        except psycopg.Error as error:
-            self.cleanup_failures += 1
+            if result.status is CleanupStatus.UNVERIFIED:
+                raise RuntimeError(
+                    f"Ownership of database {database.name} cannot be verified; "
+                    "inspect it manually before removal"
+                )
             raise RuntimeError(
-                f"Could not clean up database {database.name}; inspect sessions, "
-                "prepared transactions, logical slots and subscriptions, then remove it manually"
-            ) from error
+                f"Could not clean up database {database.name} ({result.detail}); inspect "
+                "sessions, prepared transactions, logical slots and subscriptions, then "
+                "remove it manually"
+            ) from result.error
         self.owned.pop(database.name)
-        self.dropped += 1
+        current().record_cleanup(result.status.value)
+        if result.status is CleanupStatus.REMOVED:
+            self.dropped += 1
+        else:
+            self.already_absent += 1
 
     def close(self) -> None:
         failures = []
-        for database in list(self.owned.values())[::-1]:
-            try:
-                self.drop(database)
-            except (RuntimeError, KeyboardInterrupt) as error:
-                failures.append(
-                    f"Could not confirm cleanup of database {database.name}: "
-                    f"{str(error) or type(error).__name__}; inspect it before manual removal"
-                )
+        with current().protected():
+            for database in list(self.owned.values())[::-1]:
+                try:
+                    self.drop(database)
+                except (RuntimeError, KeyboardInterrupt) as error:
+                    failures.append(
+                        f"Could not confirm cleanup of database {database.name}: "
+                        f"{str(error) or type(error).__name__}; inspect it before manual removal"
+                    )
+            for name in sorted(self.unproven):
+                exists = settle_unproven_create(self.admin_dsn, name)
+                if exists is False:
+                    self.unproven.discard(name)
         if self.unproven:
             failures.append("Unverified creation outcome for: " + ", ".join(sorted(self.unproven)))
         if failures:

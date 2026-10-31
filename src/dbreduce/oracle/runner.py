@@ -3,7 +3,6 @@ import json
 import os
 import re
 import selectors
-import signal
 import subprocess
 import sys
 import time
@@ -11,7 +10,9 @@ from collections import Counter
 from collections.abc import Callable
 from enum import Enum
 
+from dbreduce.cancellation import TERMINATE_GRACE, current
 from dbreduce.performance import Performance
+from dbreduce.processes import close_pipes, run_owned, stop_group
 
 VERDICT_PREFIX = "DBREDUCE_VERDICT "
 
@@ -45,6 +46,10 @@ matched = all(
 print(json.dumps(matched))
 """
 
+# DBReduce signals the whole process group: SIGTERM first, SIGKILL after a grace period.
+# The supervisor only has to outlive the command so it can report its status and then kill
+# whatever remains in the group. A no-op handler (not SIG_IGN) keeps the command's own
+# SIGTERM disposition at the default, because ignored signals survive exec.
 _ORACLE_SUPERVISOR = """
 import os
 import signal
@@ -53,10 +58,7 @@ import sys
 
 status_fd = int(os.environ.pop("DBREDUCE_ORACLE_STATUS_FD"))
 
-def terminate_group(_signum, _frame):
-    os.killpg(os.getpgrp(), signal.SIGKILL)
-
-signal.signal(signal.SIGTERM, terminate_group)
+signal.signal(signal.SIGTERM, lambda _signum, _frame: None)
 child = subprocess.Popen(sys.argv[2], shell=True)
 status = child.wait()
 os.write(status_fd, str(status).encode("ascii"))
@@ -161,7 +163,7 @@ class Oracle:
                 if matcher_timeout <= 0:
                     raise subprocess.TimeoutExpired("oracle matcher", self.timeout)
                 try:
-                    result = subprocess.run(
+                    result = run_owned(
                         [sys.executable, "-c", _REGEX_MATCHER],
                         input=json.dumps(
                             {
@@ -172,7 +174,6 @@ class Oracle:
                                 "texts": [stdout, stderr],
                             }
                         ),
-                        capture_output=True,
                         text=True,
                         timeout=matcher_timeout,
                         check=True,
@@ -189,6 +190,7 @@ class Oracle:
         return OracleOutcome.SAME_FAILURE, identity
 
     def _run(self, env: dict[str, str]) -> tuple[int, str, str]:
+        current().checkpoint()
         capture_out = self.mode in ("json", "framed_json") or self.stdout_pattern is not None
         capture_err = self.stderr_pattern is not None
         buffers = [bytearray(), bytearray()]
@@ -196,62 +198,73 @@ class Oracle:
         os.set_inheritable(status_write, True)
         supervisor_env = {**env, "DBREDUCE_ORACLE_STATUS_FD": str(status_write)}
         deadline = time.monotonic() + self.timeout
+        process: subprocess.Popen[bytes] | None = None
+        control = current()
         try:
-            with subprocess.Popen(
-                [sys.executable, "-c", _ORACLE_SUPERVISOR, str(status_write), self.command],
-                shell=False,
-                env=supervisor_env,
-                start_new_session=True,
-                pass_fds=(status_write,),
-                stdout=subprocess.PIPE if capture_out else subprocess.DEVNULL,
-                stderr=subprocess.PIPE if capture_err else subprocess.DEVNULL,
-            ) as process:
-                os.close(status_write)
-                status_data = bytearray()
-                status_complete = False
-                try:
-                    with selectors.DefaultSelector() as selector:
-                        selector.register(status_read, selectors.EVENT_READ, "status")
-                        for index, stream in enumerate((process.stdout, process.stderr)):
-                            if stream is not None:
-                                selector.register(stream, selectors.EVENT_READ, index)
-                        while selector.get_map():
-                            remaining = deadline - time.monotonic()
-                            if remaining <= 0:
-                                raise subprocess.TimeoutExpired(self.command, self.timeout)
-                            for key, _ in selector.select(min(remaining, 0.05)):
-                                chunk = os.read(key.fd, 65536)
-                                if not chunk:
-                                    selector.unregister(key.fileobj)
-                                    if key.data == "status":
-                                        status_complete = True
-                                    continue
+            # A cancelling signal must not land between starting the supervisor and
+            # knowing about it: the group is registered before the signal can be delivered.
+            with control.protected():
+                process = subprocess.Popen(
+                    [sys.executable, "-c", _ORACLE_SUPERVISOR, str(status_write), self.command],
+                    shell=False,
+                    env=supervisor_env,
+                    start_new_session=True,
+                    pass_fds=(status_write,),
+                    stdout=subprocess.PIPE if capture_out else subprocess.DEVNULL,
+                    stderr=subprocess.PIPE if capture_err else subprocess.DEVNULL,
+                )
+                control.track_group(process.pid)
+            os.close(status_write)
+            status_data = bytearray()
+            status_complete = False
+            try:
+                with selectors.DefaultSelector() as selector:
+                    selector.register(status_read, selectors.EVENT_READ, "status")
+                    for index, stream in enumerate((process.stdout, process.stderr)):
+                        if stream is not None:
+                            selector.register(stream, selectors.EVENT_READ, index)
+                    while selector.get_map():
+                        remaining = deadline - time.monotonic()
+                        if remaining <= 0:
+                            raise subprocess.TimeoutExpired(self.command, self.timeout)
+                        for key, _ in selector.select(min(remaining, 0.05)):
+                            chunk = os.read(key.fd, 65536)
+                            if not chunk:
+                                selector.unregister(key.fileobj)
                                 if key.data == "status":
-                                    status_data.extend(chunk)
-                                    if len(status_data) > 4:
-                                        raise OracleError("Invalid oracle supervisor status")
-                                    continue
-                                buffer = buffers[key.data]
-                                if len(buffer) + len(chunk) > 1024 * 1024:
-                                    raise OracleError("Oracle output exceeds 1 MiB identity limit")
-                                buffer.extend(chunk)
-                    if not status_complete or not status_data:
-                        raise OracleError("Oracle supervisor exited without a command status")
-                    try:
-                        code = int(status_data)
-                    except ValueError as error:
-                        raise OracleError("Invalid oracle supervisor status") from error
-                    process.wait(timeout=max(0, deadline - time.monotonic()))
-                except BaseException:
-                    # Signal the unreaped supervisor PID. Its handler kills its
-                    # process group while the group leader is still alive.
-                    try:
-                        process.send_signal(signal.SIGTERM)
-                    except ProcessLookupError:
-                        pass
-                    process.wait()
-                    raise
+                                    status_complete = True
+                                continue
+                            if key.data == "status":
+                                status_data.extend(chunk)
+                                if len(status_data) > 4:
+                                    raise OracleError("Invalid oracle supervisor status")
+                                continue
+                            buffer = buffers[key.data]
+                            if len(buffer) + len(chunk) > 1024 * 1024:
+                                raise OracleError("Oracle output exceeds 1 MiB identity limit")
+                            buffer.extend(chunk)
+                if not status_complete or not status_data:
+                    raise OracleError("Oracle supervisor exited without a command status")
+                try:
+                    code = int(status_data)
+                except ValueError as error:
+                    raise OracleError("Invalid oracle supervisor status") from error
+                process.wait(timeout=max(0, deadline - time.monotonic()))
+            except BaseException as error:
+                # Stop the supervisor's process group: SIGTERM and a bounded grace for
+                # cancellation, an immediate kill for a timeout or an oracle error.
+                immediate = isinstance(error, (subprocess.TimeoutExpired, OracleError))
+                stop_group(process, grace=0 if immediate else TERMINATE_GRACE)
+                raise
+        except BaseException:
+            # Cancellation delivered right after the supervisor started, before the inner try.
+            if process is not None and process.poll() is None:
+                stop_group(process, grace=TERMINATE_GRACE)
+            raise
         finally:
+            if process is not None:
+                control.untrack_group(process.pid)
+                close_pipes(process)
             os.close(status_read)
             try:
                 os.close(status_write)
@@ -270,6 +283,7 @@ class Oracle:
         cleanup: Callable[[], None] | None = None,
     ) -> bool:
         for _ in range(self.confirm):
+            current().checkpoint()
             try:
                 with self.performance.measure("oracle_state_preparation"):
                     prepared_url = prepare()

@@ -13,11 +13,12 @@ python -m pip install dbreduce
 dbreduce --help
 ```
 
-DBReduce v0.5.0 requires Python 3.10 or newer and is tested on Python 3.10–3.14.
+DBReduce requires Python 3.10 or newer and is tested on Python 3.10–3.15.
 See the [v0.5.0 release](https://github.com/0then0/dbreduce/releases/tag/v0.5.0)
 and [changelog](../CHANGELOG.md) for the candidate-validity protocol extension.
-The tested PostgreSQL range is 15–18, separately verified
-for snapshot, clone, schema reduction and final logical restore.
+The tested PostgreSQL range is 13–18. Snapshot, schema reduction and final logical
+restore are verified on all of them; the clone backend needs PostgreSQL 15 or later and
+is verified on 15–18.
 See [the compatibility decision record](compatibility.md).
 
 Prefer `uv tool install dbreduce` and check `dbreduce --help`.
@@ -219,7 +220,8 @@ and signal conventions, including application exit codes in that range. A wrappe
 that hides a signal behind another exit code cannot be detected reliably.
 `--timeout` defaults to 60 seconds for each oracle execution, including failure
 matcher evaluation. Remaining oracle process-group children are killed after each
-execution, including timeout and Ctrl-C.
+execution, including timeout and cancellation (see
+[Cancellation and cleanup](#cancellation-and-cleanup)).
 
 Without a matcher or structured mode, legacy mode warns and accepts any nonzero exit
 below 126. DB connection failures and other application setup errors cannot be
@@ -255,8 +257,8 @@ are rejected because `pg_restore` refuses to read their database settings.
 Plain SQL is an output format, not an accepted input format. This avoids executing
 `psql` reconnect/shell meta-commands while restoring user input.
 
-Candidate isolation defaults to `--candidate-backend snapshot`. PostgreSQL 15–18
-can explicitly use `--candidate-backend clone`; see [isolation](isolation.md) for
+Candidate isolation defaults to `--candidate-backend snapshot`, available on
+PostgreSQL 13–18. PostgreSQL 15–18 can explicitly use `--candidate-backend clone`; see [isolation](isolation.md) for
 its ownership checks, replication preflight and final logical normalization.
 `--restore-jobs 4` enables parallel custom-archive restores when the environment
 benefits; the default remains 1. Clone strategies are `wal_log` (default) and
@@ -354,7 +356,7 @@ rejections and cache hits. Accepted/rejected counts partition those completed pr
 includes all work. `performance.phases` gives count, total and average for each
 operation. Some phases are nested, such as `restore` within oracle state preparation,
 so their totals must not be added together. `database_stats` records exact created,
-dropped, clone attempts/failures and cleanup failures. `cache_stats` records hit rate
+dropped or already absent, clone attempts/failures and cleanup failures. `cache_stats` records hit rate
 and an estimated time saved from observed oracle cycle cost; it is an estimate, not
 an observed counterfactual. Clone mode disables the exact fingerprint cache.
 `database_clone_seconds` is zero for the snapshot backend. Aborted runs publish no
@@ -404,6 +406,80 @@ Full restore per probe remains conservative and expensive. See the
 unsuitable for very large databases: row identities,
 FK closure and candidate dumps require memory/disk proportional to the dataset.
 
+## Cancellation and cleanup
+
+`dbreduce reduce` handles **SIGINT** (Ctrl-C) and **SIGTERM** on POSIX systems. The
+handlers exist only while the command runs in the main thread and the previous ones
+are restored afterwards; importing DBReduce or running `dbreduce inspect` installs none.
+
+On the first signal DBReduce
+
+1. records the request and stops: no new candidate and no new oracle call starts;
+2. stops the processes it started (the oracle's process group, `pg_dump`, `pg_restore`):
+   SIGTERM to the group, at most 5 seconds to exit, then SIGKILL to that group and a
+   reap. Processes DBReduce did not start are never signalled;
+3. removes what the run owns: the workspace database, clone databases and the temporary
+   directory with its dumps. A database is dropped only after its exact name, OID, owner
+   and run marker match what DBReduce created. Nothing is removed by the `dbreduce_`
+   prefix, and the source database is never touched;
+4. exits without publishing `--output` or `--report`. A cancelled run is never
+   reported as reproduced, not reproduced or candidate-invalid.
+
+The signal handler only starts this sequence. Cleanup runs afterwards, not inside it.
+
+**Shutdown budget.** Steps 2 and 3 share one budget of **30 seconds** from the first
+signal. It shortens process waits, connection attempts, cleanup SQL (`statement_timeout`)
+and lock waits to the time left, and it is not multiplied by the number of databases. A
+watchdog ends the process at most 2 seconds after the budget, even if a call is stuck. The
+budget is fixed, not an option. When running in a container, set the stop timeout above it
+(for example `docker stop --time 40`; Docker's default is 10 seconds).
+
+**Repeated signals.** While cleanup runs, further SIGINT or SIGTERM are ignored and noted
+on stderr, so one impatient Ctrl-C cannot skip a `finally`. To abandon cleanup at once send
+**SIGQUIT** (Ctrl-\) or SIGKILL. Databases and the temporary directory can then remain.
+
+**Exit status and messages.** Status `130` (SIGINT) or `143` (SIGTERM) means cancelled and
+every owned resource was confirmed removed or already absent. Status `1` after a
+`Cancelled by ...` message means cancelled but cleanup is not confirmed; stderr lists each
+remaining resource with its state:
+
+- `removed` or `already absent`: nothing remains;
+- `not removed`: PostgreSQL refused or timed out; the database is still there;
+- `ownership unverified`: a database of that name exists but its OID, owner or marker
+  differ, so DBReduce left it alone;
+- `result unknown`: the server could not be reached, the budget ended, or a reply was
+  lost; the database may still exist;
+- `creation outcome unverified`: the run stopped between `CREATE DATABASE` and writing
+  its marker. DBReduce first cancels the statement it left running, then reports a
+  database that exists without a marker instead of dropping it by name.
+
+Databases and the temporary directory are reported separately: with an unreachable server
+the directory with the dump is still removed locally while the databases are listed as
+unknown.
+
+**If cleanup is not confirmed**, check only the databases listed. For each one run the
+printed query, `SELECT oid, shobj_description(oid, 'pg_database') FROM pg_database WHERE
+datname = '<name>'`. The database belongs to the run if the comment equals the printed
+marker (a `creation outcome unverified` database has no comment yet; its name is random
+and was generated by the run). Then `DROP DATABASE "<name>"`. Do not clean by pattern. A
+listed temporary directory holds a copy of the source data; delete it when no `dbreduce`
+process is running.
+
+**Publication.** Both result files are linked into place only after the working databases
+were dropped and the final identity check passed. A signal before that rolls the files
+back; once both exist the result is complete, is kept, and a later signal only prints a
+note.
+
+**Not covered.** SIGHUP (a closed terminal or dropped SSH session), SIGKILL, an
+out-of-memory kill, a machine failure, or a container
+destroyed after its grace period run no cleanup and print nothing; the run's databases
+and directory remain, later runs do not look for them, and there is no janitor. Commands
+that leave the oracle's process group (daemons, `docker exec` into another container)
+are not stopped. The automated checks signal the DBReduce process, or its process
+group, directly; they do not reproduce `docker stop` or a CI service's cancellation.
+`docker stop` signals only the container's main process, so that process must be DBReduce
+or an init that forwards SIGTERM (for example `docker run --init`).
+
 ## Boundaries and limitations
 
 - PostgreSQL only; POSIX systems (Linux/macOS) for oracle process-group cleanup.
@@ -430,10 +506,11 @@ FK closure and candidate dumps require memory/disk proportional to the dataset.
 - Do not allow other clients to write into the workspace. Do not use production as
   a workspace. Clone cleanup verifies exact name, OID, owner and run marker before
   dropping each owned database.
-- Ordinary failures and Ctrl-C attempt to clean up owned databases. An uncertain
-  clone CREATE reply, killed process or server outage can leave a generated database.
-  DBReduce reports exact names when it cannot confirm ownership or cleanup; inspect
-  them manually. It does not force-disconnect other sessions from clone databases.
+- Ordinary failures, Ctrl-C and SIGTERM attempt to clean up owned databases within the
+  [shutdown budget](#cancellation-and-cleanup). An uncertain `CREATE DATABASE` reply, a
+  killed process (SIGKILL, OOM, container removal) or a server outage can leave a generated
+  database. DBReduce reports exact names when it can, never after SIGKILL; inspect them
+  manually. It does not force-disconnect other sessions from clone databases.
 - Dumps/reports contain application data. Store them appropriately; no DSN is saved
   in the report. PostgreSQL errors are intentionally summarized without credentials.
 
@@ -458,6 +535,12 @@ duplicate rows, extension-owned tables, locale, and SQL round-trip. The 12,005-r
 example is intended for a manual end-to-end run;
 full reduction is deliberately not part of the default test suite.
 
+`tests/test_cancellation_postgres.py` starts real `dbreduce reduce` processes, signals them
+at observed stages and checks that owned databases, files and processes are gone while the
+source and a foreign database stay intact. Use a dedicated disposable server for it (a
+container is enough): its cleanup drops any new `dbreduce_<32 hex>` database that appears
+while a test runs, and its process checks read `/proc` (skipped elsewhere).
+
 ## Module interfaces
 
 - `reducer.engine.Backend`: `state()` and `attempt(table, rows)`; no PostgreSQL imports.
@@ -466,3 +549,5 @@ full reduction is deliberately not part of the default test suite.
 - `cache`: fingerprints and per-run outcomes.
 - `graph`: dependencies and strongly connected components for inspection.
 - `cli`: input validation, orchestration, progress and result files.
+- `cancellation`: signal handling, the shutdown budget and the report of unremoved resources.
+- `processes`: subprocesses in their own process group, with a bounded stop.
