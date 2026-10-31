@@ -26,10 +26,10 @@ def alive(pid: int) -> bool:
         os.kill(pid, 0)
     except ProcessLookupError:
         return False
-    status = Path(f"/proc/{pid}/stat")
-    if status.exists():
-        return status.read_text().rsplit(")", 1)[1].split()[0] != "Z"
-    return True
+    try:  # the process may vanish between the checks
+        return Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()[0] != "Z"
+    except FileNotFoundError:
+        return not Path("/proc/self/stat").exists()  # no /proc at all: kill(0) already said alive
 
 
 def wait_for(predicate, timeout=15.0):

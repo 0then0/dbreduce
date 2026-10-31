@@ -131,10 +131,10 @@ def process_alive(pid: int) -> bool:
         os.kill(pid, 0)
     except ProcessLookupError:
         return False
-    stat = Path(f"/proc/{pid}/stat")
-    if stat.exists():
-        return stat.read_text().rsplit(")", 1)[1].split()[0] != "Z"
-    return True
+    try:  # the process may vanish between the checks
+        return Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()[0] != "Z"
+    except FileNotFoundError:
+        return not Path("/proc/self/stat").exists()  # no /proc at all: kill(0) already said alive
 
 
 def marked_processes(run_id: str) -> list[int]:
