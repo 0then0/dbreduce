@@ -106,6 +106,7 @@ def test_reduce_json_identity_report(tmp_path, monkeypatch, final_invalid):
     workspace.url = "postgresql:///dbreduce_test"
     workspace.databases_created = 0
     workspace.databases_dropped = 0
+    workspace.databases_absent = 0
     workspace.cleanup_failures = 0
     from collections import Counter
 

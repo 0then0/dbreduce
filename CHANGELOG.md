@@ -2,8 +2,36 @@
 
 Notable user-facing changes.
 
-## [Unreleased]
+## [0.5.1] - 2026-10-31
 
+- Support Python 3.10–3.15 and PostgreSQL 13–18. Python 3.15 and PostgreSQL 13–14
+  needed no runtime change. The clone backend still requires PostgreSQL 15 or later and
+  now stops with a version error before any dump or restore on older servers. The CI
+  matrix gains Python 3.15 and PostgreSQL 13 and 14. Version-dependent tests are skipped
+  on servers that lack the feature, and a flaky test that left a database behind now
+  cleans up after itself.
+- Redraw the project icon: a dashed source database reduced to a small one that keeps the
+  highlighted row.
+- Report `database_stats.already_absent` for databases that were gone when cleanup ran.
+- Handle SIGTERM like SIGINT in `dbreduce reduce`: stop new candidates and oracle calls,
+  stop owned subprocess groups (SIGTERM, then SIGKILL after at most 5 s), remove the
+  workspace and clone databases and the temporary dump directory, then exit with status
+  128+signal. Previously SIGTERM left the workspace database and a full dump behind.
+- Bound cancellation by one 30-second shutdown budget shared by subprocess stops,
+  connections, cleanup SQL and lock waits; a watchdog ends the process shortly after it
+  and reports what is unconfirmed. A repeated signal during cleanup is ignored; SIGQUIT
+  or SIGKILL abandons it.
+- Report cleanup honestly: removed, already absent, not removed, ownership unverified or
+  result unknown, per database, separately from the temporary directory, with a way to
+  check each one. Exit status 1 means cancelled with cleanup unconfirmed. Ownership checks
+  (OID, owner, run marker) are unchanged, and nothing is removed by name prefix.
+- Resolve an interrupted `CREATE DATABASE` by cancelling the statement this run left
+  on the server before deciding; a database that appears without a marker is reported,
+  never dropped by name.
+- Run `pg_dump`/`pg_restore` and the oracle's matcher in their own process groups so
+  a stopped run cannot be held by a grandchild that keeps the output pipes open.
+  The oracle supervisor no longer kills the group on SIGTERM itself; DBReduce sends
+  SIGTERM, waits a bounded grace period and escalates.
 - Add repository editing/Git defaults, contribution and security policies, and
   issue/PR templates; document local checks and dependency-update cadence.
 - Bound CI job runtimes while retaining the existing test and release matrices.

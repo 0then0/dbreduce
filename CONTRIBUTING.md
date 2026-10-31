@@ -67,7 +67,7 @@ superuser test role. Never point these tests at a shared or production server.
 DBREDUCE_TEST_ADMIN=postgresql://localhost/postgres uv run --locked pytest -q -m postgres
 ```
 
-The existing CI matrix tests Python 3.10–3.14 and PostgreSQL 15–18, builds wheel
+The CI matrix tests Python 3.10–3.15 and PostgreSQL 13–18, builds wheel
 and source distributions, and checks standalone installation. Release publication
 runs only for version tags or an explicit release workflow dispatch.
 

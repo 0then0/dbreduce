@@ -1,4 +1,5 @@
 import os
+import signal
 import subprocess
 from unittest.mock import MagicMock, patch
 
@@ -91,6 +92,32 @@ def test_restore_failure_still_drops_created_copy(tmp_path):
     assert not workspace.created
     statement = connection.execute.call_args.args[0].as_string()
     assert statement.startswith('DROP DATABASE "dbreduce_')
+
+
+def test_leftover_report_does_not_reuse_the_result_for_an_earlier_database():
+    connection = MagicMock()
+    connection.__enter__.return_value = connection
+    workspace = Workspace("postgresql:///original")
+
+    def execute(query, *_args):
+        cursor = MagicMock()
+        statement = query.as_string() if hasattr(query, "as_string") else query
+        if statement.startswith("SELECT oid, datdba FROM pg_database"):
+            cursor.fetchone.return_value = (123, 456)
+        elif statement.startswith("SELECT oid, datdba, shobj_description"):
+            cursor.fetchone.return_value = (123, 456, workspace.marker)
+        return cursor
+
+    connection.execute.side_effect = execute
+    with patch("dbreduce.postgres.database.psycopg.connect", return_value=connection):
+        workspace.create()
+        workspace.create()  # drops the first database, then creates the second
+        (leftover,) = workspace.leftovers()
+        assert leftover.name == workspace.name
+        assert leftover.state == "removal not attempted"
+        assert workspace.marker in leftover.detail
+        workspace.close()
+        assert workspace.leftovers() == []
 
 
 def test_interrupt_after_create_still_drops_copy():
@@ -193,14 +220,14 @@ def test_cleanup_failure_keeps_original_reason_without_leaking_database_error(
 
 
 def test_inline_sslpassword_is_rejected_before_spawning():
-    with patch("dbreduce.postgres.dump.subprocess.run") as run:
+    with patch("dbreduce.postgres.dump.run_owned") as run:
         with pytest.raises(ValueError, match="sslpassword"):
             client(["pg_dump"], "dbname=test password=dbsecret sslpassword=keysecret")
         run.assert_not_called()
 
 
 def test_database_password_not_in_process_arguments():
-    with patch("dbreduce.postgres.dump.subprocess.run") as run:
+    with patch("dbreduce.postgres.dump.run_owned") as run:
         run.return_value.returncode = 0
         client(["pg_dump"], "dbname=test password=syntheticsecret")
         args = run.call_args.args[0]
@@ -210,7 +237,7 @@ def test_database_password_not_in_process_arguments():
 
 def test_database_client_timeout_is_reported():
     with patch(
-        "dbreduce.postgres.dump.subprocess.run",
+        "dbreduce.postgres.dump.run_owned",
         side_effect=subprocess.TimeoutExpired("pg_dump", 600),
     ):
         with pytest.raises(RuntimeError, match="timed out"):
@@ -218,7 +245,7 @@ def test_database_client_timeout_is_reported():
 
 
 def test_database_client_error_classified_without_leaking_details():
-    with patch("dbreduce.postgres.dump.subprocess.run") as run:
+    with patch("dbreduce.postgres.dump.run_owned") as run:
         run.return_value.returncode = 1
         run.return_value.stderr = "password authentication failed: syntheticsecret"
         with pytest.raises(RuntimeError, match="authentication failed") as error:
@@ -255,7 +282,7 @@ def test_archive_settings_ignore_non_utf8_schema_text(tmp_path, encoding):
         + f"ENCODING = '{encoding}' LOCALE_PROVIDER = libc LOCALE = 'C';\n".encode()
     )
 
-    with patch("dbreduce.postgres.database.subprocess.run") as run:
+    with patch("dbreduce.postgres.database.run_owned") as run:
         run.return_value.returncode = 0
         run.return_value.stdout = stdout
         settings = read_archive_settings(archive)
@@ -267,7 +294,7 @@ def test_archive_settings_ignore_non_utf8_schema_text(tmp_path, encoding):
 def test_archive_with_newline_database_name_reports_pg_restore_rejection(tmp_path):
     archive = tmp_path / "source.dump"
     archive.write_bytes(b"PGDMP")
-    with patch("dbreduce.postgres.database.subprocess.run") as run:
+    with patch("dbreduce.postgres.database.run_owned") as run:
         run.return_value.returncode = 1
         run.return_value.stderr = (
             b"pg_restore: error: database name contains a newline or carriage return: "
@@ -276,3 +303,32 @@ def test_archive_with_newline_database_name_reports_pg_restore_rejection(tmp_pat
         with pytest.raises(ValueError, match="name containing a newline or carriage return"):
             read_archive_settings(archive)
         assert run.call_args.kwargs["env"]["LC_ALL"] == "C"
+
+
+def test_database_already_absent_is_counted_apart_from_dropped():
+    connection = MagicMock()
+    connection.__enter__.return_value = connection
+    workspace = Workspace("postgresql:///original")
+
+    def execute(query, *_args):
+        cursor = MagicMock()
+        statement = query.as_string() if hasattr(query, "as_string") else query
+        if statement.startswith("SELECT oid, datdba FROM pg_database"):
+            cursor.fetchone.return_value = (123, 456)
+        elif statement.startswith("SELECT oid, datdba, shobj_description"):
+            cursor.fetchone.return_value = None  # someone else already removed it
+        return cursor
+
+    connection.execute.side_effect = execute
+    with patch("dbreduce.postgres.database.psycopg.connect", return_value=connection):
+        workspace.create()
+        workspace.close()
+    assert not workspace.created and workspace.leftovers() == []
+    assert (workspace.databases_dropped, workspace.databases_absent) == (0, 1)
+    assert workspace.cleanup_failures == 0
+
+
+def test_kill_signal_exists_on_every_platform():
+    from dbreduce.processes import KILL
+
+    assert KILL in (getattr(signal, "SIGKILL", None), signal.SIGTERM)

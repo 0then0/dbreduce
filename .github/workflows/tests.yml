@@ -20,7 +20,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python: ['3.10', '3.11', '3.12', '3.13', '3.14']
+        python: ['3.10', '3.11', '3.12', '3.13', '3.14', '3.15']
     env:
       UV_PYTHON: ${{ matrix.python }}
     steps:
@@ -46,6 +46,10 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          - pg: 13
+            python: '3.11'
+          - pg: 14
+            python: '3.15'
           - pg: 15
             python: '3.10'
           - pg: 16

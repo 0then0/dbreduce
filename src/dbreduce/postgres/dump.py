@@ -4,6 +4,8 @@ from pathlib import Path
 
 from psycopg.conninfo import conninfo_to_dict, make_conninfo
 
+from dbreduce.processes import run_owned
+
 
 class ClientError(RuntimeError):
     def __init__(self, command: str, reason: str, returncode: int) -> None:
@@ -25,14 +27,12 @@ def client(command: list[str], dsn: str) -> None:
     if password is not None:
         env["PGPASSWORD"] = str(password)
     try:
-        result = subprocess.run(
+        result = run_owned(
             [*command, "--dbname", make_conninfo("", **params)],
             env=env,
             stdin=subprocess.DEVNULL,
-            capture_output=True,
             text=True,
             timeout=600,
-            check=False,
         )
     except subprocess.TimeoutExpired as error:
         raise RuntimeError(f"{command[0]} timed out after 600 seconds") from error

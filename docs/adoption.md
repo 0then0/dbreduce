@@ -45,7 +45,7 @@ v0.5.0 supports the [candidate-validity contract](candidate-invalid.md) for both
 strict and framed JSON oracles. Case-specific wrappers may explicitly mark known
 invalid schema/data states; unknown application/environment failures remain
 infrastructure errors. Current feedback requirements are Python >=3.10,
-PostgreSQL 15–18 with matching clients, and DBReduce v0.5.0 or the latest release.
+PostgreSQL 13–18 with matching clients, and DBReduce v0.5.1 or the latest release.
 Reports should state how invalidity was established, separately from negative
 target checks and unresolved errors.
 
